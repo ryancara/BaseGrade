@@ -19,10 +19,15 @@ int main()
     bg::ContrastParams id;
     const float *dwg = bg::lumaWeights(bg::kGamutDWG);
 
-    // Exact identity when all shaping controls are neutral.
+    // Exact identity when contrast and toe are neutral. Curve Softness should
+    // not create its own curve when Contrast is zero.
     for (float x : {-0.02f, 0.f, 0.001f, 0.18f, 1.f, 10.f}) {
         check(bg::applyContrastScalar(x, id) == x,
               "neutral contrast settings should be exact scalar identity");
+        bg::ContrastParams softOnly = id;
+        softOnly.softness = 100.0;
+        check(bg::applyContrastScalar(x, softOnly) == x,
+              "Curve Softness alone should be exact identity");
     }
     {
         float r, g, b;
