@@ -11,6 +11,7 @@
 #include "ofxsImageEffect.h"
 #include "teq_core.h"
 #include "color_management.h"
+#include "regularization.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,7 +26,7 @@
     "and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 2
+#define kPluginVersionMinor 3
 
 namespace {
 
@@ -42,7 +43,9 @@ public:
         transfer_ = fetchChoiceParam("inputTransfer");
         for (int i = 0; i < 5; ++i) bands_[i] = fetchIntParam(kBandNames[i]);
         pivot_ = fetchDoubleParam("pivot");
-        regularization_ = fetchIntParam("detail"); // keep old ID for compatibility
+        // Keep the internal parameter ID stable for BaseGrade project/preset
+        // compatibility going forward, while exposing ART's UI name.
+        regularization_ = fetchIntParam("detail");
         regularizationScale_ = fetchDoubleParam("regularizationScale");
         showMap_ = fetchBooleanParam("showMap");
     }
@@ -99,8 +102,10 @@ public:
             }
         });
 
-        // 1.0x reproduces ART's 350px full-resolution spatial scale exactly.
-        eq.filterMask(Y, args.renderScale.x * regularizationScale);
+        // 1.0x takes ART's exact original path. Other values change only the
+        // large 350 px regularization stage; the small ~5 px conditioning pass
+        // remains ART-compatible.
+        bg::filterMaskScaled(eq, pp, Y, args.renderScale.x, regularizationScale);
 
         const OfxRectI rw = args.renderWindow;
         const int rh = rw.y2 - rw.y1;
@@ -241,8 +246,8 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         page->addChild(*p);
     }
     {
-        // Retain the original internal ID "detail" so settings from the ART
-        // parity build remain readable, while exposing ART's UI name.
+        // Retain the original internal ID "detail" for BaseGrade project and
+        // preset compatibility going forward, while exposing ART's UI name.
         OFX::IntParamDescriptor *p = desc.defineIntParam("detail");
         p->setLabels("Regularization", "Regularization", "Regularization");
         p->setDefault(4);
@@ -259,8 +264,10 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(1.0);
         p->setRange(0.05, 8.0);
         p->setDisplayRange(0.25, 4.0);
-        p->setHint("Spatial scale of the large regularization pass. 1.0x is "
-                   "ART's original 350-pixel full-resolution radius.");
+        p->setHint("Spatial scale of ART's large regularization pass. 1.0x is "
+                   "the original 350-pixel full-resolution radius; 0.5x is "
+                   "about 175 px and 2.0x about 700 px. This control affects "
+                   "Regularization levels 2-4 only.");
         page->addChild(*p);
     }
     {
