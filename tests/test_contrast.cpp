@@ -2,8 +2,11 @@
 #include "../contrast_render_overlay.h"
 #include "../color_management.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <limits>
 
 static int failures = 0;
 
@@ -19,6 +22,7 @@ int main()
 {
     bg::ContrastParams id;
     const float *dwg = bg::lumaWeights(bg::kGamutDWG);
+    const float *rec2020 = bg::lumaWeights(bg::kGamutRec2020);
 
     // Exact identity when contrast and toe are neutral. Curve Softness should
     // not create its own curve when Contrast is zero.
@@ -37,8 +41,30 @@ int main()
               "neutral contrast settings should be exact RGB identity");
     }
 
+    // Prepared render constants must reproduce the public convenience path.
+    {
+        bg::ContrastParams p;
+        p.contrast = 73.0;
+        p.pivotEV = -0.7;
+        p.softness = 41.0;
+        p.toeStrength = -28.0;
+        p.toeRangeEV = 5.2;
+        p.colourPreserve = 67.0;
+        const bg::PreparedContrast q = bg::prepareContrast(p);
+
+        for (float x : {-0.01f, 0.0003f, 0.02f, 0.18f, 0.7f, 3.0f})
+            check(bg::applyContrastScalar(x, p) == bg::applyContrastScalar(x, q),
+                  "prepared scalar contrast should be bit-identical");
+
+        float ar, ag, ab, br, bgc, bb;
+        bg::applyContrastRGB(p, dwg, 0.42f, 0.18f, 0.08f, ar, ag, ab);
+        bg::applyContrastRGB(q, dwg, 0.42f, 0.18f, 0.08f, br, bgc, bb);
+        check(ar == br && ag == bgc && ab == bb,
+              "prepared RGB contrast should be bit-identical");
+    }
+
     // Pivoted contrast must leave its pivot fixed while separating values
-    // above and below it.
+    // above and below it when the independent toe is not acting on the pivot.
     {
         bg::ContrastParams p;
         p.contrast = 100.0; // 2x local slope
@@ -49,9 +75,34 @@ int main()
         const float dOut = bg::applyContrastScalar(dark, p);
         const float bOut = bg::applyContrastScalar(bright, p);
         check(std::fabs(pOut - pivot) < 2e-6f,
-              "contrast pivot should remain fixed");
+              "contrast pivot should remain fixed before toe shaping");
         check(dOut < dark, "positive contrast should darken below the pivot");
         check(bOut > bright, "positive contrast should brighten above the pivot");
+    }
+
+    // The numerical code-domain slope at the pivot should match the requested
+    // contrast slope at every softness when Toe Amount is neutral.
+    {
+        bool ok = true;
+        constexpr double eps = 1.0e-6;
+        for (double softness : {0.0, 25.0, 50.0, 100.0}) {
+            for (double contrast : {-100.0, -25.0, 50.0, 100.0}) {
+                for (double pivotEV : {-2.0, 0.0, 2.0}) {
+                    bg::ContrastParams p;
+                    p.contrast = contrast;
+                    p.softness = softness;
+                    p.pivotEV = pivotEV;
+                    const bg::PreparedContrast q = bg::prepareContrast(p);
+                    const double x = q.pivotCode;
+                    const double y0 = bg::applyContrastCode(x - eps, q);
+                    const double y1 = bg::applyContrastCode(x + eps, q);
+                    const double slope = (y1 - y0) / (2.0 * eps);
+                    if (!std::isfinite(slope) || std::fabs(slope - q.slope) > 2.0e-5)
+                        ok = false;
+                }
+            }
+        }
+        check(ok, "contrast slope at pivot should match requested slope");
     }
 
     // Curve Softness should reduce extreme movement while preserving the
@@ -68,7 +119,7 @@ int main()
               "Curve Softness should roll off strong highlight expansion");
         const float pivot = float(bg::contrastPivotLinear(0.0));
         check(std::fabs(bg::applyContrastScalar(pivot, soft) - pivot) < 2e-6f,
-              "Curve Softness should keep the pivot fixed");
+              "Curve Softness should keep the pre-toe pivot fixed");
     }
 
     // Bipolar Toe Amount should soften/lift in the positive direction and
@@ -112,8 +163,42 @@ int main()
         }
     }
 
+    // Deterministic sweep across the full control ranges. The scalar curve must
+    // remain monotonic as input exposure increases.
+    {
+        std::uint32_t state = 0x12345678u;
+        auto random01 = [&]() {
+            state = state * 1664525u + 1013904223u;
+            return double(state) / double(std::numeric_limits<std::uint32_t>::max());
+        };
+
+        bool monotonic = true;
+        for (int s = 0; s < 512 && monotonic; ++s) {
+            bg::ContrastParams p;
+            p.contrast = -200.0 + 400.0 * random01();
+            p.pivotEV = -6.0 + 12.0 * random01();
+            p.softness = 100.0 * random01();
+            p.toeStrength = -100.0 + 200.0 * random01();
+            p.toeRangeEV = 1.0 + 7.0 * random01();
+            const bg::PreparedContrast q = bg::prepareContrast(p);
+
+            double previous = -std::numeric_limits<double>::infinity();
+            for (int i = 0; i <= 256; ++i) {
+                const double ev = -12.0 + 20.0 * (double(i) / 256.0);
+                const float in = float(0.18 * std::pow(2.0, ev));
+                const double out = bg::applyContrastScalar(in, q);
+                if (!std::isfinite(out) || out + 1.0e-7 < previous) {
+                    monotonic = false;
+                    break;
+                }
+                previous = out;
+            }
+        }
+        check(monotonic, "contrast curve should remain monotonic across parameter sweep");
+    }
+
     // Colour Preserve blends between per-channel curves and a luminance-ratio
-    // path. The luminance path should preserve channel ratios for a safe sample.
+    // path. Ordinary colours should preserve channel ratios at 100%.
     {
         bg::ContrastParams rgb;
         rgb.contrast = 80.0;
@@ -128,13 +213,60 @@ int main()
 
         check(std::fabs((lr / lg) - (inR / inG)) < 2e-5f &&
               std::fabs((lb / lg) - (inB / inG)) < 2e-5f,
-              "100% Colour Preserve should preserve RGB ratios when Y is safe");
+              "100% Colour Preserve should preserve RGB ratios when confidence is high");
         check(std::fabs(rr - lr) + std::fabs(rg - lg) + std::fabs(rb - lb) > 1e-4f,
               "RGB and luminance contrast paths should differ on coloured input");
     }
 
+    // A physically valid Rec.2020 blue must not be deleted by the luminance
+    // path when positive contrast pushes its very low Y below zero.
+    {
+        bg::ContrastParams p;
+        p.contrast = 100.0;
+        p.colourPreserve = 100.0;
+        float r, g, b;
+        bg::applyContrastRGB(p, rec2020, 0.0f, 0.0f, 0.5f, r, g, b);
+        check(std::isfinite(r) && std::isfinite(g) && std::isfinite(b) &&
+              b > 0.1f && (r + g + b) > 0.1f,
+              "100% Colour Preserve should not crush real Rec.2020 blue to black");
+    }
+
+    // The old hard Y fallback produced a large step between these neighbouring
+    // DWG pixels. The confidence fade should keep them visually continuous.
+    {
+        bg::ContrastParams p;
+        p.contrast = 100.0;
+        p.colourPreserve = 100.0;
+        const bg::PreparedContrast q = bg::prepareContrast(p);
+
+        float r0, g0, b0, r1, g1, b1;
+        bg::applyContrastRGB(q, dwg, 0.00235f, 0.05f, 0.30f, r0, g0, b0);
+        bg::applyContrastRGB(q, dwg, 0.00236f, 0.05f, 0.30f, r1, g1, b1);
+        const float jump = std::max({std::fabs(r1 - r0),
+                                     std::fabs(g1 - g0),
+                                     std::fabs(b1 - b0)});
+        check(jump < 1.0e-3f,
+              "Colour Preserve should remain continuous around low-Y wide-gamut colours");
+    }
+
+    // Near black, luminance-ratio processing cannot reproduce a lifted black
+    // because 0 * gain remains 0. Fade back to RGB so negative contrast retains
+    // the intended curve response rather than hitting the gain limit.
+    {
+        bg::ContrastParams rgb;
+        rgb.contrast = -100.0;
+        rgb.colourPreserve = 0.0;
+        bg::ContrastParams lum = rgb;
+        lum.colourPreserve = 100.0;
+        float rr, rg, rb, lr, lg, lb;
+        bg::applyContrastRGB(rgb, dwg, 1.0e-4f, 1.0e-4f, 1.0e-4f, rr, rg, rb);
+        bg::applyContrastRGB(lum, dwg, 1.0e-4f, 1.0e-4f, 1.0e-4f, lr, lg, lb);
+        check(rr == lr && rg == lg && rb == lb,
+              "Colour Preserve should fade to RGB near black for negative contrast");
+    }
+
     // DWG can produce zero/negative Y for extreme blue values. The preserve
-    // path must remain finite and fall back safely instead of exploding Y'/Y.
+    // path must remain finite and fall back smoothly instead of exploding Y'/Y.
     {
         bg::ContrastParams p;
         p.contrast = 100.0;
