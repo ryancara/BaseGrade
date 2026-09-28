@@ -1,0 +1,27 @@
+# Build output
+build/
+build-*/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated OpenFX bundles
+*.ofx.bundle/
+
+# Local OpenFX SDK checkout
+openfx/
+
+# Local test binaries
+test_core
+ArtToneEqCoreTest
+
+# macOS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
