@@ -1,4 +1,5 @@
 #include "../contrast.h"
+#include "../contrast_render_overlay.h"
 #include "../color_management.h"
 
 #include <cmath>
@@ -142,6 +143,28 @@ int main()
         bg::applyContrastRGB(p, dwg, 0.0f, 0.0f, 1.0f, r, g, b);
         check(std::isfinite(r) && std::isfinite(g) && std::isfinite(b),
               "Colour Preserve should remain finite for negative/near-zero DWG luminance");
+    }
+
+    // The DCTL-style raster diagnostic must leave pixels outside its panel
+    // untouched and composite visible content inside the panel.
+    {
+        bg::ContrastParams p;
+        p.contrast = 60.0;
+        p.softness = 40.0;
+        p.toeStrength = 30.0;
+        bg::ContrastCurveRasterOverlay overlay(
+            1000, 600, bg::kTransferDaVinciIntermediate, p);
+        check(overlay.valid(), "raster Show Curve overlay should initialise");
+
+        float r = 0.3f, g = 0.4f, b = 0.5f;
+        overlay.composite(0, 0, r, g, b);
+        check(r == 0.3f && g == 0.4f && b == 0.5f,
+              "raster overlay should not touch pixels outside its panel");
+
+        r = 0.3f; g = 0.4f; b = 0.5f;
+        overlay.composite(30, 20, r, g, b);
+        check(std::fabs(r - 0.3f) + std::fabs(g - 0.4f) + std::fabs(b - 0.5f) > 1e-4f,
+              "raster overlay should composite pixels inside its panel");
     }
 
     if (failures) {
