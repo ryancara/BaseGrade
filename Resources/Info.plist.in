@@ -5,18 +5,18 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>ArtToneEq.ofx</string>
+  <string>BaseGrade.ofx</string>
   <key>CFBundleIdentifier</key>
-  <string>org.example.ArtToneEqualizer</string>
+  <string>io.github.ryancara.BaseGrade</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>ART Tone Equalizer</string>
+  <string>BaseGrade</string>
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>0.2</string>
   <key>CFBundleVersion</key>
-  <string>1.0</string>
+  <string>0.2</string>
 </dict>
 </plist>
