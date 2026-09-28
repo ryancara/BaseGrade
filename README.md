@@ -59,10 +59,10 @@ Very large combined Temperature/Tint corrections can move the target white outsi
 The contrast stage is a global tone-curve operation with no spatial regularization. It is applied after the Tone Equalizer and before the selected output transfer is re-encoded. Control-dependent curve constants are prepared once per render rather than recomputed for every channel of every pixel.
 
 - **Contrast** changes the local curve slope around its pivot. `+100` is approximately 2x local slope and `-100` approximately 0.5x.
-- **Contrast Pivot (EV)** is independent of the Tone Equalizer pivot and is measured in stops relative to scene-linear 18% grey. It is the fixed point of the contrast/softness stage; if the pivot is placed inside the active toe region, the independent toe stage can move the final output at that point.
-- **Curve Softness** progressively rolls off the extra contrast displacement away from the pivot. It is neutral when Contrast is zero and preserves the requested local slope at the pre-toe pivot.
+- **Contrast Pivot (EV)** is independent of the Tone Equalizer pivot and is measured in stops relative to scene-linear 18% grey. It is the fixed point of the complete scalar contrast/toe curve.
+- **Curve Softness** progressively rolls off the extra contrast displacement away from the pivot. It is neutral when Contrast is zero and preserves the requested local slope at the pivot.
 - **Toe Amount** is bipolar. Positive values soften/lift deep shadows; negative values deepen/harden them.
-- **Toe Range (EV)** chooses how far below 18% grey the toe begins. Larger values restrict the toe to deeper shadows.
+- **Toe Range (EV)** places the toe threshold a selected number of stops below Contrast Pivot, measured on the contrast/softness curve output. Larger values restrict the toe to deeper output tones. Because the threshold is evaluated after Contrast and Curve Softness, negative contrast can lift dark non-negative inputs above the threshold and reduce or eliminate the Toe effect at larger ranges.
 - **Colour Preserve** blends from regular per-channel RGB contrast at `0%` toward luminance-ratio contrast at `100%`.
 
 The luminance-ratio path is confidence-weighted rather than hard-switched. BaseGrade fades smoothly back toward the RGB result when luminance is very small or is only a small fraction of the brightest RGB channel, which protects saturated wide-gamut colours and avoids discontinuities near black. The `Y'/Y` gain is still checked for finite values and bounded as a final safety guard. Because this confidence is colour-dependent, `100%` Colour Preserve means "maximum safe luminance preservation" rather than forcing the luminance-ratio path on every pixel.
@@ -78,7 +78,7 @@ The graph is shown over approximately `-8 EV` to `+6 EV` relative to 18% grey an
 - a middle-grey crosshair
 - the current Contrast Pivot point
 
-The display responds live to Contrast, Contrast Pivot, Curve Softness, Toe Amount, and Toe Range. Colour Preserve is not represented because its effective RGB/luminance blend is colour-dependent rather than a single scalar tone curve. The pivot marker follows the true scalar output, so it visibly moves if the pivot itself falls inside the active toe region.
+The display responds live to Contrast, Contrast Pivot, Curve Softness, Toe Amount, and Toe Range. Colour Preserve is not represented because its effective RGB/luminance blend is colour-dependent rather than a single scalar tone curve. The pivot marker remains at the fixed Contrast Pivot while the rest of the curve, including the toe, moves around it.
 
 Because this diagnostic is part of the rendered image while enabled, **Show Curve must be switched off before a final render or export**.
 
@@ -166,7 +166,8 @@ The host-independent test suite checks:
 - Tint direction (`+` magenta, `-` green)
 - extended Temperature and Tint endpoints
 - global contrast identity and pivot behaviour
-- requested slope at the pre-toe contrast pivot across Curve Softness values
+- requested slope at the contrast pivot across Curve Softness values
+- active Toe Amount cannot move Contrast Pivot
 - deterministic monotonicity sweeps across Contrast, Pivot, Softness and Toe ranges
 - Curve Softness roll-off
 - positive and negative Toe Amount behaviour and threshold continuity
