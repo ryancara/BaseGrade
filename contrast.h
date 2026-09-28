@@ -18,7 +18,9 @@ struct ContrastParams {
 
 inline bool contrastIdentity(const ContrastParams &p)
 {
-    return p.contrast == 0.0 && p.softness == 0.0 && p.toeStrength == 0.0;
+    // Softness only shapes an existing contrast adjustment, so changing it at
+    // Contrast = 0 is intentionally neutral. Toe remains an independent shaper.
+    return p.contrast == 0.0 && p.toeStrength == 0.0;
 }
 
 inline double contrastSlope(double contrast)
@@ -51,18 +53,19 @@ inline double applyContrastCode(double code, const ContrastParams &p)
 
     const double pivot = contrastPivotCode(p.pivotEV);
     const double slope = contrastSlope(p.contrast);
-    double d = (code - pivot) * slope;
+    const double fromPivot = code - pivot;
+    double delta = (slope - 1.0) * fromPivot;
 
-    // Symmetric soft-sign roll-off. The derivative at the pivot is unchanged,
-    // so Contrast still controls the local slope while Softness progressively
-    // rounds the shoulder and lower half of the S-curve away from the pivot.
+    // Softness rolls off only the extra contrast displacement. This means it
+    // cannot create a tone curve by itself when Contrast is zero, while the
+    // derivative at the pivot still equals the requested contrast slope.
     const double softness = std::max(0.0, std::min(p.softness, 100.0)) / 100.0;
-    if (softness > 0.0) {
+    if (softness > 0.0 && delta != 0.0) {
         const double k = 4.0 * softness;
-        d = d / (1.0 + k * std::fabs(d));
+        delta /= 1.0 + k * std::fabs(fromPivot);
     }
 
-    double y = pivot + d;
+    double y = code + delta;
 
     // Independent low-end toe. The rational form is C1-continuous at the toe
     // threshold and compresses increasingly deep shadows without a hard knee.
