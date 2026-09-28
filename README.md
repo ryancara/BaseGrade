@@ -20,7 +20,7 @@ This branch currently includes:
 - ART-derived Tone Equalizer
 - **Regularization** and **Regularization Scale**
 - global **Contrast**, **Contrast Pivot**, **Curve Softness**, **Toe Amount**, **Toe Range**, and **Colour Preserve** controls
-- viewer-only **Show Curve** overlay for the global tone curve
+- raster **Show Curve** diagnostic for the global tone curve
 - ART parity gamut options retained for comparison testing
 
 No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, applies Exposure and white balance, builds the Tone Equalizer mask using that gamut's RGB-to-XYZ Y coefficients, applies the Tone Equalizer correction in linear light, applies the global contrast stage, and then re-encodes to the selected transfer.
@@ -69,7 +69,7 @@ The luminance-only path guards against non-positive or very small Y values befor
 
 ### Show Curve
 
-**Show Curve** enables a viewer-only OFX overlay. It does not modify rendered pixels or exports.
+**Show Curve** uses a DCTL-style raster diagnostic rather than the OFX viewer-overlay API. While enabled, the graph is composited directly into BaseGrade's output image, so it works independently of Resolve's on-screen-control mode.
 
 The graph is shown over approximately `-8 EV` to `+6 EV` relative to 18% grey and includes:
 
@@ -78,7 +78,9 @@ The graph is shown over approximately `-8 EV` to `+6 EV` relative to 18% grey an
 - a middle-grey crosshair
 - the current Contrast Pivot point
 
-The overlay responds live to Contrast, Contrast Pivot, Curve Softness, Toe Amount, and Toe Range. Colour Preserve is not represented because it changes how the same scalar curve is applied to RGB rather than changing the curve itself.
+The display responds live to Contrast, Contrast Pivot, Curve Softness, Toe Amount, and Toe Range. Colour Preserve is not represented because it changes how the same scalar curve is applied to RGB rather than changing the curve itself.
+
+Because this diagnostic is part of the rendered image while enabled, **Show Curve must be switched off before a final render or export**.
 
 ### Regularization Scale
 
@@ -168,6 +170,7 @@ The host-independent test suite checks:
 - positive and negative Toe Amount behaviour and threshold continuity
 - RGB vs luminance-only Colour Preserve behaviour
 - saturated-blue / non-positive-Y safety in the luminance path
+- raster Show Curve compositing inside its panel and no modification outside it
 - ART-style box-filter border behaviour
 - guided-filter subsampling behaviour
 - Tone Equalizer smoke tests across Regularization 0-4
