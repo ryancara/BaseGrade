@@ -1,4 +1,5 @@
 #include "../teq_core.h"
+#include "../color_management.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +51,18 @@ static float run(const Params &pp, const Plane &scene, float px, float py,
 
 int main()
 {
+    // DaVinci Intermediate published reference mappings and round-trip.
+    check(std::fabs(bg::encodeTransfer(0.18f, bg::kTransferDaVinciIntermediate) - 0.336043f) < 2e-6f,
+          "DaVinci Intermediate should map 18% grey to 0.336043");
+    check(std::fabs(bg::decodeTransfer(0.336043f, bg::kTransferDaVinciIntermediate) - 0.18f) < 2e-5f,
+          "DaVinci Intermediate should decode 0.336043 to 18% grey");
+    for (float x : {-0.01f, 0.f, 0.001f, 0.18f, 1.f, 10.f, 100.f}) {
+        const float y = bg::encodeTransfer(x, bg::kTransferDaVinciIntermediate);
+        const float z = bg::decodeTransfer(y, bg::kTransferDaVinciIntermediate);
+        const float tol = std::max(2e-6f, std::fabs(x) * 2e-5f);
+        check(std::fabs(z - x) < tol, "DaVinci Intermediate encode/decode should round-trip");
+    }
+
     // ART boxblur parity: verify the recursive implementation still computes
     // the expected shrinking-window mean, including borders and in-place use.
     {
