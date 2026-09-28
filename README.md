@@ -2,25 +2,51 @@
 
 BaseGrade is an OpenFX image-grading plugin aimed at bringing photo-oriented primary controls to DaVinci Resolve and other OFX hosts.
 
-The project began with a close port of ART's Tone Equalizer. The `main` branch is the known-working ART-parity baseline; development branches add BaseGrade-specific features while keeping the ART-derived core clean and independently testable.
+The project began with a close port of ART's Tone Equalizer. The `main` branch is the known-working BaseGrade foundation; development branches add new primary controls while keeping the ART-derived core clean and independently testable.
 
 ## Current feature branch
 
-`feature/basegrade-input-and-regularization`
+`feature/white-balance`
 
-This branch adds:
+This branch currently includes:
 
-- plugin/bundle name changed to **BaseGrade**
-- stable plugin identifier `io.github.ryancara.BaseGrade`
 - **Input Gamut** selection
 - **Input Transfer** selection
 - DaVinci Wide Gamut support
 - native DaVinci Intermediate decode/process/re-encode
-- **Detail** renamed in the UI to **Regularization**
-- **Regularization Scale**, with `1.0x` equal to ART's original spatial scale
+- scene-linear **Exposure**
+- **Temperature** and **Tint** white-balance controls
+- **White Balance Method** dropdown with `Linear RGB Gain` and `Bradford`
+- ART-derived Tone Equalizer
+- **Regularization** and **Regularization Scale**
 - ART parity gamut options retained for comparison testing
 
-No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, uses that gamut's RGB-to-XYZ Y coefficients to build the Tone Equalizer mask, applies the correction in linear light, and then re-encodes to the selected transfer.
+No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, applies Exposure and white balance, builds the Tone Equalizer mask using that gamut's RGB-to-XYZ Y coefficients, applies the Tone Equalizer correction in linear light, and then re-encodes to the selected transfer.
+
+### Exposure
+
+Exposure is a scene-linear photographic gain applied before white balance and the Tone Equalizer:
+
+- `+1 EV` = 2x linear RGB
+- `0 EV` = identity
+- `-1 EV` = 0.5x linear RGB
+
+Because Exposure is upstream of the Tone Equalizer, changing exposure naturally moves image content through the equalizer's tonal zones.
+
+### Temperature and Tint
+
+Temperature and Tint are centred at zero and use the same target-white calculation for both white-balance methods.
+
+**Temperature** is a relative reciprocal-colour-temperature shift. One slider unit equals one mired. Positive values warm the image and negative values cool it. The zero point is anchored to the selected gamut's actual reference white, so `0` remains identity for D65, D60 and D50 working spaces.
+
+**Tint** moves perpendicular to the Planckian locus in CIE 1960 `u,v`. Positive values move toward magenta and negative values toward green. The current mapping is 0.0002 `u,v` units per slider unit.
+
+The two white-balance methods apply that same target white differently:
+
+- **Linear RGB Gain** converts the target white to the selected working RGB space and applies per-channel scene-linear gains.
+- **Bradford** converts through XYZ and Bradford's cone-response basis, applies the source-to-target white scaling there, then returns to the selected working RGB space.
+
+This makes the dropdown a fair A/B test: changing the method does not change the Temperature/Tint curve itself.
 
 ### Regularization Scale
 
@@ -49,9 +75,6 @@ The diagnostic colour-map positions follow the Tone Equalizer mask, but the prev
 
 ## Planned controls
 
-- Exposure
-- Temperature
-- Tint
 - Contrast
 - Contrast luminance/RGB mix
 - additional input transfer functions where useful
@@ -101,6 +124,9 @@ Then fully restart Resolve.
 
 The host-independent test suite checks:
 
+- Exposure stop mappings
+- zero Temp/Tint identity across every supported gamut and both WB methods
+- both WB methods map neutral RGB to the same colourimetric target white
 - ART-style box-filter border behaviour
 - guided-filter subsampling behaviour
 - Tone Equalizer smoke tests across Regularization 0-4
