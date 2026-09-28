@@ -64,7 +64,7 @@ int main()
     }
 
     // Pivoted contrast must leave its pivot fixed while separating values
-    // above and below it when the independent toe is not acting on the pivot.
+    // above and below it.
     {
         bg::ContrastParams p;
         p.contrast = 100.0; // 2x local slope
@@ -75,9 +75,31 @@ int main()
         const float dOut = bg::applyContrastScalar(dark, p);
         const float bOut = bg::applyContrastScalar(bright, p);
         check(std::fabs(pOut - pivot) < 2e-6f,
-              "contrast pivot should remain fixed before toe shaping");
+              "contrast pivot should remain fixed");
         check(dOut < dark, "positive contrast should darken below the pivot");
         check(bOut > bright, "positive contrast should brighten above the pivot");
+    }
+
+    // Toe Range is measured below Contrast Pivot, so an active toe can never
+    // reach or move the pivot itself.
+    {
+        bool fixed = true;
+        for (double pivotEV : {-6.0, -3.0, 0.0, 3.0, 6.0})
+            for (double range : {1.0, 4.0, 8.0})
+                for (double toe : {-100.0, -40.0, 40.0, 100.0})
+                    for (double contrast : {-100.0, 100.0}) {
+                        bg::ContrastParams p;
+                        p.pivotEV = pivotEV;
+                        p.toeRangeEV = range;
+                        p.toeStrength = toe;
+                        p.contrast = contrast;
+                        p.softness = 30.0;
+                        const float pivot = float(bg::contrastPivotLinear(pivotEV));
+                        const float out = bg::applyContrastScalar(pivot, p);
+                        if (std::fabs(out - pivot) > 2e-5f * std::max(pivot, 1.0e-6f))
+                            fixed = false;
+                    }
+        check(fixed, "active toe must not move the contrast pivot");
     }
 
     // The numerical code-domain slope at the pivot should match the requested
@@ -119,7 +141,7 @@ int main()
               "Curve Softness should roll off strong highlight expansion");
         const float pivot = float(bg::contrastPivotLinear(0.0));
         check(std::fabs(bg::applyContrastScalar(pivot, soft) - pivot) < 2e-6f,
-              "Curve Softness should keep the pre-toe pivot fixed");
+              "Curve Softness should keep the pivot fixed");
     }
 
     // Bipolar Toe Amount should soften/lift in the positive direction and
