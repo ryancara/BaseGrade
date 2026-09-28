@@ -144,21 +144,19 @@ int main()
         check(std::isfinite(c), "regularization result must remain finite");
     }
 
-    // BaseGrade extension: 1.0x must take the exact ART reference path.
-    {
+    // Exercise BaseGrade's duplicated regularization body at a value that is
+    // not exactly 1.0, while still snapping to ART's original 350px radius.
+    // This catches future drift between regularization.h and teq_core.h.
+    for (int reg = 0; reg <= 4; ++reg) {
         Params p = sh;
-        p.regularization = 4;
+        p.regularization = reg;
         ToneEqualizer eq(p);
         Plane a = scene;
         Plane b = scene;
         eq.filterMask(a, 1.0);
-        bg::filterMaskScaled(eq, p, b, 1.0, 1.0);
-        float maxErr = 0.f;
-        for (size_t i = 0; i < a.v.size(); ++i)
-            maxErr = std::max(maxErr, std::fabs(a.v[i] - b.v[i]));
-        std::printf("regularization scale 1.0 parity max error: %.9g\n", maxErr);
-        check(maxErr == 0.f,
-              "Regularization Scale 1.0 must be bit-identical to ART filterMask");
+        bg::filterMaskScaled(eq, p, b, 1.0, 1.0 + 1e-9);
+        check(a.v == b.v,
+              "filterMaskScaled body must match ART when the radius is unchanged");
     }
 
     // Away from 1.0x, the large radius should stay on multiples of five at
