@@ -70,7 +70,7 @@ public:
         for (int i = 0; i < 5; ++i) pp.bands[i] = bands_[i]->getValueAtTime(args.time);
         pp.pivot = pivot_->getValueAtTime(args.time);
         pp.regularization = regularization_->getValueAtTime(args.time);
-        pp.regularizationScale = regularizationScale_->getValueAtTime(args.time);
+        const double regularizationScale = regularizationScale_->getValueAtTime(args.time);
         const bool showMap = showMap_->getValueAtTime(args.time);
 
         teq::ToneEqualizer eq(pp);
@@ -99,7 +99,8 @@ public:
             }
         });
 
-        eq.filterMask(Y, args.renderScale.x);
+        // 1.0x reproduces ART's 350px full-resolution spatial scale exactly.
+        eq.filterMask(Y, args.renderScale.x * regularizationScale);
 
         const OfxRectI rw = args.renderWindow;
         const int rh = rw.y2 - rw.y1;
