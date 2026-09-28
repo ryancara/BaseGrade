@@ -31,7 +31,7 @@
     "explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 8
+#define kPluginVersionMinor 9
 
 namespace {
 
@@ -108,6 +108,7 @@ public:
         cp.toeStrength = toeStrength_->getValueAtTime(args.time);
         cp.toeRangeEV = toeRange_->getValueAtTime(args.time);
         cp.colourPreserve = colourPreserve_->getValueAtTime(args.time);
+        const bg::PreparedContrast preparedContrast = bg::prepareContrast(cp);
         const bool showCurve = showCurve_->getValueAtTime(args.time);
 
         teq::ToneEqualizer eq(pp);
@@ -191,7 +192,7 @@ public:
                         b *= c;
 
                         float cr, cg, cb;
-                        bg::applyContrastRGB(cp, lw, r, g, b, cr, cg, cb);
+                        bg::applyContrastRGB(preparedContrast, lw, r, g, b, cr, cg, cb);
                         d[0] = bg::encodeTransfer(cr, transferIndex);
                         d[1] = bg::encodeTransfer(cg, transferIndex);
                         d[2] = bg::encodeTransfer(cb, transferIndex);
@@ -420,7 +421,8 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setRange(-6.0, 6.0);
         p->setDisplayRange(-3.0, 3.0);
         p->setHint("Fixed point of the global contrast curve, measured in stops "
-                   "relative to 18% scene-linear grey. Independent of Tone EQ Pivot.");
+                   "relative to 18% scene-linear grey. Toe Amount can move this "
+                   "point if the pivot is placed inside the active toe region.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -432,7 +434,8 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setRange(0.0, 100.0);
         p->setDisplayRange(0.0, 100.0);
         p->setHint("Rounds the global contrast line into a progressively softer "
-                   "S-curve while keeping the contrast pivot fixed.");
+                   "S-curve while keeping the contrast pivot fixed before the "
+                   "independent toe stage is applied.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -469,8 +472,10 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(0.0);
         p->setRange(0.0, 100.0);
         p->setDisplayRange(0.0, 100.0);
-        p->setHint("Blends contrast processing from regular per-channel RGB "
-                   "curves at 0% to luminance-only contrast at 100%.");
+        p->setHint("Blends from regular per-channel RGB contrast at 0% toward "
+                   "luminance-ratio contrast at 100%. Saturated and near-black "
+                   "colours fade smoothly back toward the RGB path when a stable "
+                   "luminance ratio cannot be formed.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -478,8 +483,8 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         OFX::BooleanParamDescriptor *p = desc.defineBooleanParam("showCurve");
         p->setLabels("Show Curve", "Show Curve", "Show Curve");
         p->setDefault(false);
-        p->setHint("Draws the current scalar contrast/toe curve over the image as "
-                   "a diagnostic. Turn this off before rendering or exporting.");
+        p->setHint("Composites the current scalar contrast/toe curve into the "
+                   "rendered image for diagnosis. Turn this off before export.");
         page->addChild(*p);
     }
 }
