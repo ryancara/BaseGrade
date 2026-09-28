@@ -1,5 +1,6 @@
 #include "../teq_core.h"
 #include "../color_management.h"
+#include "../regularization.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -51,6 +52,14 @@ static float run(const Params &pp, const Plane &scene, float px, float py,
 
 int main()
 {
+    // Every luminance row should map neutral RGB (R=G=B) to the same neutral Y.
+    for (int g = 0; g < int(bg::kGamutCount); ++g) {
+        const float *lw = bg::lumaWeights(g);
+        const float sum = lw[0] + lw[1] + lw[2];
+        check(std::fabs(sum - 1.f) < 1e-4f,
+              "luminance coefficients should sum to approximately 1");
+    }
+
     // DaVinci Intermediate published reference mappings and round-trip.
     check(std::fabs(bg::encodeTransfer(0.18f, bg::kTransferDaVinciIntermediate) - 0.336043f) < 2e-6f,
           "DaVinci Intermediate should map 18% grey to 0.336043");
@@ -88,11 +97,10 @@ int main()
         std::printf("boxMean border/in-place max error vs direct mean: %.9g\n", maxErr);
         check(maxErr < 2e-6f, "ART-style boxMean should match direct shrinking-window mean");
     }
+
     // Exact current-ART calculate_subsampling() behaviour.
     check(calcSubsampling(1920, 1080, 350) == 5,
           "350px radius should subsample by 5");
-    // ART's loop includes divisor 1, so positive integer radii always return
-    // before the fallback. A prime radius therefore subsamples by 1.
     check(calcSubsampling(1920, 1080, 7) == 1,
           "prime radius should fall through the divisor loop to subsampling 1");
     check(calcSubsampling(600, 400, 350) == 1,
@@ -134,6 +142,34 @@ int main()
         float c = run(p, scene, W / 2 - 4, my); // 4px inside dark side
         std::printf("detail=%d: correction next to edge (dark side) = %.3f\n", reg, c);
         check(std::isfinite(c), "regularization result must remain finite");
+    }
+
+    // BaseGrade extension: 1.0x must take the exact ART reference path.
+    {
+        Params p = sh;
+        p.regularization = 4;
+        ToneEqualizer eq(p);
+        Plane a = scene;
+        Plane b = scene;
+        eq.filterMask(a, 1.0);
+        bg::filterMaskScaled(eq, p, b, 1.0, 1.0);
+        float maxErr = 0.f;
+        for (size_t i = 0; i < a.v.size(); ++i)
+            maxErr = std::max(maxErr, std::fabs(a.v[i] - b.v[i]));
+        std::printf("regularization scale 1.0 parity max error: %.9g\n", maxErr);
+        check(maxErr == 0.f,
+              "Regularization Scale 1.0 must be bit-identical to ART filterMask");
+    }
+
+    // Away from 1.0x, the large radius should stay on multiples of five at
+    // full resolution so the fast guided filter retains 5x subsampling.
+    for (int i = 0; i <= 30; ++i) {
+        const double scale = 0.95 + 0.005 * i;
+        const int radius = bg::scaledRegularizationRadius(1.0, scale);
+        check(radius % 5 == 0,
+              "scaled large regularization radius should be a multiple of five");
+        check(calcSubsampling(3840, 2160, radius) == 5,
+              "scaled large regularization radius should retain 5x subsampling");
     }
 
     Params half = sh;
