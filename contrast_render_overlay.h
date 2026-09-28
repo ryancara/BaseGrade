@@ -17,7 +17,8 @@ class ContrastCurveRasterOverlay {
 public:
     ContrastCurveRasterOverlay(int imageWidth, int imageHeight,
                                int transferIndex, const ContrastParams &params)
-        : transferIndex_(transferIndex), params_(params)
+        : transferIndex_(transferIndex), pivotEV_(params.pivotEV),
+          prepared_(prepareContrast(params))
     {
         if (imageWidth < 64 || imageHeight < 64) return;
 
@@ -41,8 +42,8 @@ public:
 
         zeroX_ = evToX(0.0);
         zeroY_ = evToY(0.0);
-        pivotX_ = evToX(params_.pivotEV);
-        pivotY_ = evToY(outputEV(params_.pivotEV));
+        pivotX_ = evToX(pivotEV_);
+        pivotY_ = evToY(outputEV(pivotEV_));
         valid_ = true;
     }
 
@@ -79,12 +80,14 @@ public:
         if (std::abs(y - identityY) <= line_)
             blend(r, g, b, white, white, white, 0.32f);
 
-        // Actual scalar contrast/toe curve.
+        // Actual scalar contrast/toe curve. Colour Preserve is deliberately
+        // not represented because its effective blend is colour-dependent.
         if (x >= 0 && x < int(curveY_.size()) &&
             std::abs(y - curveY_[x]) <= line_)
             blend(r, g, b, white, white, white, 0.98f);
 
-        // Contrast-pivot marker.
+        // Contrast-pivot marker follows the true scalar output. If the pivot is
+        // inside the active toe region, the independent toe stage can move it.
         const int dx = x - pivotX_;
         const int dy = y - pivotY_;
         if (dx * dx + dy * dy <= pointRadius_ * pointRadius_)
@@ -98,7 +101,7 @@ private:
     double outputEV(double inputEV) const
     {
         const float in = float(0.18 * std::pow(2.0, inputEV));
-        const float out = applyContrastScalar(in, params_);
+        const float out = applyContrastScalar(in, prepared_);
         if (!(out > 0.0f) || !std::isfinite(out)) return kMinEV;
         return std::max(kMinEV,
                         std::min(std::log2(double(out) / 0.18), kMaxEV));
@@ -128,7 +131,8 @@ private:
     }
 
     int transferIndex_ = kTransferDaVinciIntermediate;
-    ContrastParams params_;
+    double pivotEV_ = 0.0;
+    PreparedContrast prepared_;
     int marginX_ = 0, marginY_ = 0;
     int width_ = 0, height_ = 0;
     int line_ = 1, pointRadius_ = 3;
