@@ -14,7 +14,7 @@
 #include "exposure.h"
 #include "white_balance.h"
 #include "contrast.h"
-#include "contrast_overlay.h"
+#include "contrast_render_overlay.h"
 #include "regularization.h"
 
 #include <algorithm>
@@ -31,7 +31,7 @@
     "explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 7
+#define kPluginVersionMinor 8
 
 namespace {
 
@@ -61,6 +61,7 @@ public:
         toeStrength_ = fetchDoubleParam("toeStrength");
         toeRange_ = fetchDoubleParam("toeRange");
         colourPreserve_ = fetchDoubleParam("colourPreserve");
+        showCurve_ = fetchBooleanParam("showCurve");
     }
 
     void render(const OFX::RenderArguments &args) override
@@ -107,6 +108,7 @@ public:
         cp.toeStrength = toeStrength_->getValueAtTime(args.time);
         cp.toeRangeEV = toeRange_->getValueAtTime(args.time);
         cp.colourPreserve = colourPreserve_->getValueAtTime(args.time);
+        const bool showCurve = showCurve_->getValueAtTime(args.time);
 
         teq::ToneEqualizer eq(pp);
         const float pivotGain = teq::ToneEqualizer::pivotGain(pp.pivot);
@@ -116,6 +118,11 @@ public:
         std::vector<const float *> srcRows(sh);
         for (int y = 0; y < sh; ++y)
             srcRows[y] = static_cast<const float *>(src->getPixelAddress(sb.x1, sb.y1 + y));
+
+        std::unique_ptr<bg::ContrastCurveRasterOverlay> curveOverlay;
+        if (showCurve)
+            curveOverlay = std::make_unique<bg::ContrastCurveRasterOverlay>(
+                sw, sh, transferIndex, cp);
 
         // Build the spatial mask from scene-linear RGB in the selected gamut.
         // Exposure and white balance are upstream of Tone EQ. Global contrast
@@ -189,6 +196,13 @@ public:
                         d[1] = bg::encodeTransfer(cg, transferIndex);
                         d[2] = bg::encodeTransfer(cb, transferIndex);
                     }
+
+                    // DCTL-style diagnostic: composite the graph into the output
+                    // image itself. This is intentionally part of the render while
+                    // Show Curve is enabled, so turn it off before final export.
+                    if (curveOverlay && curveOverlay->valid())
+                        curveOverlay->composite(sx, sy, d[0], d[1], d[2]);
+
                     d[3] = s[3];
                 }
             }
@@ -214,6 +228,7 @@ private:
     OFX::DoubleParam *toeStrength_ = nullptr;
     OFX::DoubleParam *toeRange_ = nullptr;
     OFX::DoubleParam *colourPreserve_ = nullptr;
+    OFX::BooleanParam *showCurve_ = nullptr;
 };
 
 mDeclarePluginFactory(BaseGradeFactory, {}, {});
@@ -234,7 +249,6 @@ void BaseGradeFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
-    desc.setOverlayInteractDescriptor(new bg::ContrastCurveOverlayDescriptor);
 }
 
 void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
@@ -464,8 +478,8 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         OFX::BooleanParamDescriptor *p = desc.defineBooleanParam("showCurve");
         p->setLabels("Show Curve", "Show Curve", "Show Curve");
         p->setDefault(false);
-        p->setHint("Shows the current scalar contrast/toe curve as a viewer-only "
-                   "overlay. The overlay is never rendered into the image.");
+        p->setHint("Draws the current scalar contrast/toe curve over the image as "
+                   "a diagnostic. Turn this off before rendering or exporting.");
         page->addChild(*p);
     }
 }
