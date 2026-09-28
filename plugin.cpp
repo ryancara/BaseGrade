@@ -4,13 +4,14 @@
  *  Tone Equalizer core derived from ART. GPL-3.0-or-later; see teq_core.h.
  *
  *  BaseGrade decodes the selected input transfer to scene-linear RGB while
- *  keeping the selected input gamut unchanged. The Tone Equalizer operates in
- *  that linear gamut, using its RGB->XYZ Y row to build the luminance mask,
- *  then the result is encoded back to the selected input transfer.
+ *  keeping the selected input gamut unchanged. Primary controls and the Tone
+ *  Equalizer operate in that linear gamut, then the result is encoded back to
+ *  the selected input transfer.
  */
 #include "ofxsImageEffect.h"
 #include "teq_core.h"
 #include "color_management.h"
+#include "exposure.h"
 #include "regularization.h"
 
 #include <algorithm>
@@ -22,11 +23,11 @@
 #define kPluginGrouping "Color"
 #define kPluginDescription                                                     \
     "Photo-oriented primary grading controls for OpenFX. The current build "   \
-    "contains an ART-derived spatial Tone Equalizer with explicit input gamut "\
-    "and transfer handling."
+    "contains scene-linear Exposure plus an ART-derived spatial Tone "          \
+    "Equalizer with explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 3
+#define kPluginVersionMinor 4
 
 namespace {
 
@@ -41,6 +42,7 @@ public:
         src_ = fetchClip(kOfxImageEffectSimpleSourceClipName);
         gamut_ = fetchChoiceParam("inputGamut");
         transfer_ = fetchChoiceParam("inputTransfer");
+        exposure_ = fetchDoubleParam("exposure");
         for (int i = 0; i < 5; ++i) bands_[i] = fetchIntParam(kBandNames[i]);
         pivot_ = fetchDoubleParam("pivot");
         // Keep the internal parameter ID stable for BaseGrade project/preset
@@ -69,6 +71,9 @@ public:
         transferIndex = std::max(0, std::min(transferIndex, int(bg::kTransferCount) - 1));
         const float *lw = bg::lumaWeights(gamutIndex);
 
+        const double exposureEV = exposure_->getValueAtTime(args.time);
+        const float exposureGain = bg::exposureGain(exposureEV);
+
         teq::Params pp;
         for (int i = 0; i < 5; ++i) pp.bands[i] = bands_[i]->getValueAtTime(args.time);
         pp.pivot = pivot_->getValueAtTime(args.time);
@@ -86,15 +91,20 @@ public:
             srcRows[y] = static_cast<const float *>(src->getPixelAddress(sb.x1, sb.y1 + y));
 
         // Build the spatial mask from scene-linear RGB in the selected gamut.
+        // Exposure is upstream of Tone EQ, so changing exposure naturally moves
+        // image content through the equalizer's tonal bands.
         teq::Plane Y(sw, sh);
         teq::parallelRange(sh, [&](int y0, int y1) {
             for (int y = y0; y < y1; ++y) {
                 const float *p = srcRows[y];
                 float *yr = Y.row(y);
                 for (int x = 0; x < sw; ++x) {
-                    const float r = bg::decodeTransfer(p[4 * x], transferIndex);
-                    const float g = bg::decodeTransfer(p[4 * x + 1], transferIndex);
-                    const float b = bg::decodeTransfer(p[4 * x + 2], transferIndex);
+                    const float r = bg::applyExposure(
+                        bg::decodeTransfer(p[4 * x], transferIndex), exposureGain);
+                    const float g = bg::applyExposure(
+                        bg::decodeTransfer(p[4 * x + 1], transferIndex), exposureGain);
+                    const float b = bg::applyExposure(
+                        bg::decodeTransfer(p[4 * x + 2], transferIndex), exposureGain);
                     float l = (lw[0] * r + lw[1] * g + lw[2] * b) * pivotGain;
                     if (!(l > 1e-5f)) l = 1e-5f; // also catches NaN/negative mask luma
                     yr[x] = l > 32.f ? 32.f : l;
@@ -135,9 +145,12 @@ public:
                         d[2] = bg::encodeTransfer(map[2], transferIndex);
                     } else {
                         const float c = eq.correction(ym);
-                        const float r = bg::decodeTransfer(s[0], transferIndex) * c;
-                        const float g = bg::decodeTransfer(s[1], transferIndex) * c;
-                        const float b = bg::decodeTransfer(s[2], transferIndex) * c;
+                        const float r = bg::applyExposure(
+                            bg::decodeTransfer(s[0], transferIndex), exposureGain) * c;
+                        const float g = bg::applyExposure(
+                            bg::decodeTransfer(s[1], transferIndex), exposureGain) * c;
+                        const float b = bg::applyExposure(
+                            bg::decodeTransfer(s[2], transferIndex), exposureGain) * c;
                         d[0] = bg::encodeTransfer(r, transferIndex);
                         d[1] = bg::encodeTransfer(g, transferIndex);
                         d[2] = bg::encodeTransfer(b, transferIndex);
@@ -152,6 +165,7 @@ private:
     OFX::Clip *dst_ = nullptr, *src_ = nullptr;
     OFX::ChoiceParam *gamut_ = nullptr;
     OFX::ChoiceParam *transfer_ = nullptr;
+    OFX::DoubleParam *exposure_ = nullptr;
     OFX::IntParam *bands_[5] = {};
     OFX::DoubleParam *pivot_ = nullptr;
     OFX::IntParam *regularization_ = nullptr;
@@ -222,6 +236,18 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(bg::kTransferDaVinciIntermediate);
         p->setHint("Transfer function of the incoming RGB values. BaseGrade "
                    "decodes to scene-linear for processing and re-encodes afterwards.");
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("exposure");
+        p->setLabels("Exposure (EV)", "Exposure (EV)", "Exposure (EV)");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(-10.0, 10.0);
+        p->setDisplayRange(-5.0, 5.0);
+        p->setHint("Scene-linear photographic exposure applied before the Tone "
+                   "Equalizer. +1 EV doubles linear RGB; -1 EV halves it.");
+        p->setAnimates(true);
         page->addChild(*p);
     }
 
