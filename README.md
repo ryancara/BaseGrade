@@ -37,9 +37,11 @@ Because Exposure is upstream of the Tone Equalizer, changing exposure naturally 
 
 Temperature and Tint are centred at zero and use the same target-white calculation for both white-balance methods.
 
-**Temperature** is a relative reciprocal-colour-temperature shift. One slider unit equals one mired. Positive values warm the image and negative values cool it. The zero point is anchored to the selected gamut's actual reference white, so `0` remains identity for D65, D60 and D50 working spaces.
+**Temperature** is a relative reciprocal-colour-temperature shift. One control unit equals one mired across the whole range, with no accelerated tails. Positive values warm the image and negative values cool it. The zero point is anchored to the selected gamut's actual reference white, so `0` remains identity for D65, D60 and D50 working spaces.
 
-**Tint** moves perpendicular to the Planckian locus in CIE 1960 `u,v`. Positive values move toward magenta and negative values toward green. The current mapping is 0.0002 `u,v` units per slider unit.
+The hard Temperature range is `-115` to `+450`, while the normal displayed slider range remains `-100` to `+100` for finer everyday control. In a D65 working space, the extended limits reach approximately the Planckian model's `25000 K` cool limit and `1667 K` warm limit.
+
+**Tint** moves perpendicular to the Planckian locus in CIE 1960 `u,v`. Positive values move toward magenta and negative values toward green. The mapping is 0.0002 `u,v` units per control unit. The hard range is `-200` to `+200`, with the normal displayed slider range remaining `-100` to `+100`.
 
 The two white-balance methods apply that same target white differently:
 
@@ -47,6 +49,8 @@ The two white-balance methods apply that same target white differently:
 - **Bradford** converts through XYZ and Bradford's cone-response basis, applies the source-to-target white scaling there, then returns to the selected working RGB space.
 
 This makes the dropdown a fair A/B test: changing the method does not change the Temperature/Tint curve itself.
+
+Very large combined Temperature/Tint corrections can move the target white outside the selected RGB gamut and therefore produce negative scene-linear RGB channels. BaseGrade intentionally preserves those values rather than clipping or silently changing the white-balance transform. This is expected extended-range behaviour; downstream display/output transforms may clip such values.
 
 ### Regularization Scale
 
@@ -78,6 +82,8 @@ The diagnostic colour-map positions follow the Tone Equalizer mask, but the prev
 - Contrast
 - Contrast luminance/RGB mix
 - additional input transfer functions where useful
+
+For the future luminance-only Contrast path, do not use an unguarded `f(Y) / Y` ratio. Wide-gamut or out-of-gamut RGB can produce very small or non-positive Y values, especially in saturated blue. The implementation should floor the luminance used for the ratio and limit the resulting gain, with explicit saturated-blue tests around the scene-linear `0.18` pivot.
 
 ## Build prerequisites
 
@@ -127,6 +133,11 @@ The host-independent test suite checks:
 - Exposure stop mappings
 - zero Temp/Tint identity across every supported gamut and both WB methods
 - both WB methods map neutral RGB to the same colourimetric target white
+- Linear RGB Gain and Bradford remain distinct on saturated colours
+- white-balance continuity around zero Temp/Tint
+- neutral-white luminance preservation across gamuts, methods and representative settings
+- Tint direction (`+` magenta, `-` green)
+- extended Temperature and Tint endpoints
 - ART-style box-filter border behaviour
 - guided-filter subsampling behaviour
 - Tone Equalizer smoke tests across Regularization 0-4
