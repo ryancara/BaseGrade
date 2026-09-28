@@ -420,9 +420,9 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(0.0);
         p->setRange(-6.0, 6.0);
         p->setDisplayRange(-3.0, 3.0);
-        p->setHint("Fixed point of the global contrast curve, measured in stops "
-                   "relative to 18% scene-linear grey. Toe Amount can move this "
-                   "point if the pivot is placed inside the active toe region.");
+        p->setHint("Fixed point of the global contrast/toe curve, measured in "
+                   "stops relative to 18% scene-linear grey. Toe Range moves "
+                   "with this pivot and always remains below it.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -434,8 +434,7 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setRange(0.0, 100.0);
         p->setDisplayRange(0.0, 100.0);
         p->setHint("Rounds the global contrast line into a progressively softer "
-                   "S-curve while keeping the contrast pivot fixed before the "
-                   "independent toe stage is applied.");
+                   "S-curve while keeping the Contrast Pivot fixed.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -460,8 +459,10 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(4.0);
         p->setRange(1.0, 8.0);
         p->setDisplayRange(1.0, 8.0);
-        p->setHint("Sets how far below 18% grey the toe begins. Larger values "
-                   "restrict the toe to deeper shadows.");
+        p->setHint("Places the toe threshold this many stops below Contrast "
+                   "Pivot on the contrast/softness curve output. Larger values "
+                   "restrict it to deeper output tones; negative Contrast can "
+                   "lift dark inputs above the threshold and reduce the effect.");
         p->setAnimates(true);
         page->addChild(*p);
     }
