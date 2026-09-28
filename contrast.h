@@ -11,7 +11,7 @@ struct ContrastParams {
     double contrast = 0.0;        // -200..200, 0 = identity
     double pivotEV = 0.0;         // stops relative to 18% grey
     double softness = 0.0;        // 0..100
-    double toeStrength = 0.0;     // 0..100
+    double toeStrength = 0.0;     // -100..100: harden -> soften
     double toeRangeEV = 4.0;      // 1..8 stops below 18% grey
     double colourPreserve = 0.0;  // 0..100: RGB curve -> luminance-only
 };
@@ -67,15 +67,20 @@ inline double applyContrastCode(double code, const ContrastParams &p)
 
     double y = code + delta;
 
-    // Independent low-end toe. The rational form is C1-continuous at the toe
-    // threshold and compresses increasingly deep shadows without a hard knee.
-    const double toe = std::max(0.0, std::min(p.toeStrength, 100.0)) / 100.0;
-    if (toe > 0.0) {
+    // Independent bipolar low-end toe. Positive values compress the distance
+    // below the threshold, lifting/softening the deepest shadows. Negative
+    // values expand that distance, deepening/hardening the toe. Both branches
+    // meet the unmodified curve with matching first derivative at the threshold.
+    const double toe = std::max(-100.0, std::min(p.toeStrength, 100.0)) / 100.0;
+    if (toe != 0.0) {
         const double threshold = toeThresholdCode(p.toeRangeEV);
         if (y < threshold) {
             const double dist = threshold - y;
-            const double k = 10.0 * toe;
-            y = threshold - dist / (1.0 + k * dist);
+            const double k = 10.0 * std::fabs(toe);
+            const double shapedDist = toe > 0.0
+                ? dist / (1.0 + k * dist)
+                : dist * (1.0 + k * dist);
+            y = threshold - shapedDist;
         }
     }
 
