@@ -286,11 +286,14 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setLabels("Temperature", "Temperature", "Temperature");
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
-        p->setRange(-100.0, 100.0);
+        p->setRange(-115.0, 450.0);
+        // Keep the normal grading range/feel unchanged. Resolve can still accept
+        // typed values outside this display range up to the hard parameter range.
         p->setDisplayRange(-100.0, 100.0);
         p->setHint("Relative reciprocal-colour-temperature shift around the "
                    "selected gamut's reference white. Positive warms, negative "
-                   "cools; one unit equals one mired.");
+                   "cools; one unit always equals one mired. Extended values "
+                   "outside +/-100 are available for extreme corrections.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -299,11 +302,13 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setLabels("Tint", "Tint", "Tint");
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
-        p->setRange(-100.0, 100.0);
+        p->setRange(-200.0, 200.0);
+        // Preserve the original slider sensitivity for normal adjustments.
         p->setDisplayRange(-100.0, 100.0);
         p->setHint("Colourimetric green/magenta shift perpendicular to the "
                    "Planckian locus in CIE 1960 u,v. Positive is magenta; "
-                   "negative is green.");
+                   "negative is green. Extended values outside +/-100 are "
+                   "available for extreme corrections.");
         p->setAnimates(true);
         page->addChild(*p);
     }
