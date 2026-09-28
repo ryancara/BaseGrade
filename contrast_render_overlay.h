@@ -86,8 +86,8 @@ public:
             std::abs(y - curveY_[x]) <= line_)
             blend(r, g, b, white, white, white, 0.98f);
 
-        // Contrast-pivot marker follows the true scalar output. If the pivot is
-        // inside the active toe region, the independent toe stage can move it.
+        // Contrast Pivot is a fixed point of the complete scalar curve because
+        // Toe Range is always at least one stop below the pivot.
         const int dx = x - pivotX_;
         const int dy = y - pivotY_;
         if (dx * dx + dy * dy <= pointRadius_ * pointRadius_)
