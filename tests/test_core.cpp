@@ -96,6 +96,28 @@ int main()
         check(warm.v[0] / warm.v[2] > cool.v[0] / cool.v[2],
               "positive Temperature should be warmer than negative Temperature");
     }
+    {
+        // Temperature remains one mired per unit across the extended range.
+        const double refMired = 1.0e6 / bg::kReferenceCCT[bg::kGamutDWG];
+        const bg::WhitePoint normalWarm = bg::targetWhitePoint(bg::kGamutDWG, 100.0, 0.0);
+        const double expected100K = 1.0e6 / (refMired + 100.0);
+        check(std::fabs(normalWarm.cct - expected100K) < 1e-6,
+              "+100 Temperature should retain the original one-mired-per-unit response");
+
+        const bg::WhitePoint maxCool = bg::targetWhitePoint(bg::kGamutDWG, -115.0, 0.0);
+        const bg::WhitePoint maxWarm = bg::targetWhitePoint(bg::kGamutDWG, 450.0, 0.0);
+        check(std::fabs(maxCool.cct - 25000.0) < 1e-6,
+              "extended cool range should reach the 25000 K model limit");
+        check(std::fabs(maxWarm.cct - (1.0e6 / 600.0)) < 1e-6,
+              "extended warm range should reach the low-temperature model limit");
+
+        const bg::Vec3 tintPlus = bg::targetWhiteRGB(bg::kGamutDWG, 0.0, 200.0);
+        const bg::Vec3 tintMinus = bg::targetWhiteRGB(bg::kGamutDWG, 0.0, -200.0);
+        check(std::isfinite(tintPlus.v[0]) && std::isfinite(tintPlus.v[1]) &&
+              std::isfinite(tintPlus.v[2]) && std::isfinite(tintMinus.v[0]) &&
+              std::isfinite(tintMinus.v[1]) && std::isfinite(tintMinus.v[2]),
+              "extended +/-200 Tint endpoints should remain finite");
+    }
 
     // Every luminance row should map neutral RGB (R=G=B) to the same neutral Y.
     for (int g = 0; g < int(bg::kGamutCount); ++g) {
