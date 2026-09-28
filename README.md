@@ -6,7 +6,7 @@ The project began with a close port of ART's Tone Equalizer. The `main` branch i
 
 ## Current feature branch
 
-`feature/white-balance`
+`feature/contrast`
 
 This branch currently includes:
 
@@ -19,9 +19,11 @@ This branch currently includes:
 - **White Balance Method** dropdown with `Linear RGB Gain` and `Bradford`
 - ART-derived Tone Equalizer
 - **Regularization** and **Regularization Scale**
+- global **Contrast**, **Contrast Pivot**, **Curve Softness**, **Toe Amount**, **Toe Range**, and **Colour Preserve** controls
+- viewer-only **Show Curve** overlay for the global tone curve
 - ART parity gamut options retained for comparison testing
 
-No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, applies Exposure and white balance, builds the Tone Equalizer mask using that gamut's RGB-to-XYZ Y coefficients, applies the Tone Equalizer correction in linear light, and then re-encodes to the selected transfer.
+No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, applies Exposure and white balance, builds the Tone Equalizer mask using that gamut's RGB-to-XYZ Y coefficients, applies the Tone Equalizer correction in linear light, applies the global contrast stage, and then re-encodes to the selected transfer.
 
 ### Exposure
 
@@ -52,6 +54,32 @@ This makes the dropdown a fair A/B test: changing the method does not change the
 
 Very large combined Temperature/Tint corrections can move the target white outside the selected RGB gamut and therefore produce negative scene-linear RGB channels. BaseGrade intentionally preserves those values rather than clipping or silently changing the white-balance transform. This is expected extended-range behaviour; downstream display/output transforms may clip such values.
 
+### Global Contrast
+
+The contrast stage is a global tone-curve operation with no spatial regularization. It is applied after the Tone Equalizer and before the selected output transfer is re-encoded.
+
+- **Contrast** changes the local curve slope around its pivot. `+100` is approximately 2x local slope and `-100` approximately 0.5x.
+- **Contrast Pivot (EV)** is independent of the Tone Equalizer pivot and is measured in stops relative to scene-linear 18% grey.
+- **Curve Softness** progressively rolls off the extra contrast displacement away from the pivot. It is neutral when Contrast is zero.
+- **Toe Amount** is bipolar. Positive values soften/lift deep shadows; negative values deepen/harden them.
+- **Toe Range (EV)** chooses how far below 18% grey the toe begins. Larger values restrict the toe to deeper shadows.
+- **Colour Preserve** blends from regular per-channel RGB contrast at `0%` to luminance-ratio contrast at `100%`.
+
+The luminance-only path guards against non-positive or very small Y values before forming `Y'/Y`, and limits the resulting gain. This avoids unstable behaviour with wide-gamut or out-of-gamut colours such as saturated blue in DaVinci Wide Gamut.
+
+### Show Curve
+
+**Show Curve** enables a viewer-only OFX overlay. It does not modify rendered pixels or exports.
+
+The graph is shown over approximately `-8 EV` to `+6 EV` relative to 18% grey and includes:
+
+- an identity diagonal
+- the actual scalar contrast/toe curve
+- a middle-grey crosshair
+- the current Contrast Pivot point
+
+The overlay responds live to Contrast, Contrast Pivot, Curve Softness, Toe Amount, and Toe Range. Colour Preserve is not represented because it changes how the same scalar curve is applied to RGB rather than changing the curve itself.
+
 ### Regularization Scale
 
 ART uses a small ~5 px guided-filter conditioning pass and, for Regularization levels 2-4, a much larger 350 px full-resolution regularization pass.
@@ -79,11 +107,8 @@ The diagnostic colour-map positions follow the Tone Equalizer mask, but the prev
 
 ## Planned controls
 
-- Contrast
-- Contrast luminance/RGB mix
 - additional input transfer functions where useful
-
-For the future luminance-only Contrast path, do not use an unguarded `f(Y) / Y` ratio. Wide-gamut or out-of-gamut RGB can produce very small or non-positive Y values, especially in saturated blue. The implementation should floor the luminance used for the ratio and limit the resulting gain, with explicit saturated-blue tests around the scene-linear `0.18` pivot.
+- further colour and tone controls after the contrast stage is validated
 
 ## Build prerequisites
 
@@ -138,6 +163,11 @@ The host-independent test suite checks:
 - neutral-white luminance preservation across gamuts, methods and representative settings
 - Tint direction (`+` magenta, `-` green)
 - extended Temperature and Tint endpoints
+- global contrast identity and pivot behaviour
+- Curve Softness roll-off
+- positive and negative Toe Amount behaviour and threshold continuity
+- RGB vs luminance-only Colour Preserve behaviour
+- saturated-blue / non-positive-Y safety in the luminance path
 - ART-style box-filter border behaviour
 - guided-filter subsampling behaviour
 - Tone Equalizer smoke tests across Regularization 0-4
