@@ -108,8 +108,8 @@ int main()
         const bg::WhitePoint maxWarm = bg::targetWhitePoint(bg::kGamutDWG, 450.0, 0.0);
         check(std::fabs(maxCool.cct - 25000.0) < 1e-6,
               "extended cool range should reach the 25000 K model limit");
-        check(std::fabs(maxWarm.cct - (1.0e6 / 600.0)) < 1e-6,
-              "extended warm range should reach the low-temperature model limit");
+        check(std::fabs(maxWarm.cct - 1667.0) < 1e-6,
+              "extended warm range should reach the 1667 K model limit");
 
         const bg::Vec3 tintPlus = bg::targetWhiteRGB(bg::kGamutDWG, 0.0, 200.0);
         const bg::Vec3 tintMinus = bg::targetWhiteRGB(bg::kGamutDWG, 0.0, -200.0);
