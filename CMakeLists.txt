@@ -40,21 +40,6 @@ target_include_directories(BaseGrade PRIVATE
   ${OFX_DIR}/Support/include)
 target_link_libraries(BaseGrade PRIVATE Threads::Threads)
 
-# The Show Curve viewer overlay uses the OFX V1 OpenGL overlay path. This is
-# display-only and does not make the image-processing path GPU-dependent.
-if(APPLE)
-  find_library(BASEGRADE_OPENGL_FRAMEWORK OpenGL)
-  if(NOT BASEGRADE_OPENGL_FRAMEWORK)
-    message(FATAL_ERROR "OpenGL framework not found")
-  endif()
-  target_link_libraries(BaseGrade PRIVATE ${BASEGRADE_OPENGL_FRAMEWORK})
-elseif(WIN32)
-  target_link_libraries(BaseGrade PRIVATE opengl32)
-else()
-  find_package(OpenGL REQUIRED)
-  target_link_libraries(BaseGrade PRIVATE OpenGL::GL)
-endif()
-
 set(BUNDLE "${CMAKE_BINARY_DIR}/BaseGrade.ofx.bundle")
 if(APPLE)
   file(MAKE_DIRECTORY "${BUNDLE}/Contents")
