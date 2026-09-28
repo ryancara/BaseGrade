@@ -43,6 +43,10 @@ The default is **DaVinci Wide Gamut / DaVinci Intermediate**, matching a common 
 
 For direct comparison against ART, choose **Linear** plus the corresponding `ART ... (D50 parity)` gamut entry.
 
+### Show Colour Map
+
+The diagnostic colour-map positions follow the Tone Equalizer mask, but the preview colours themselves are currently based on linearised sRGB values and are not gamut-converted into the selected working space. They should therefore be treated as approximate outside Rec.709/sRGB. This affects the diagnostic display only, not the Tone Equalizer correction.
+
 ## Planned controls
 
 - Exposure
@@ -103,7 +107,7 @@ The host-independent test suite checks:
 - every luminance coefficient row sums to approximately 1
 - DaVinci Intermediate's published 18% grey mapping
 - DaVinci Intermediate encode/decode round-trips, including negative and HDR values
-- Regularization Scale `1.0x` is bit-identical to the ART reference path
+- BaseGrade's duplicated regularization body remains bit-identical to ART when the effective radius is unchanged
 - scaled large radii retain 5x fast-guided-filter subsampling across a radius sweep
 
 Run with:
