@@ -12,7 +12,7 @@ struct ContrastParams {
     double pivotEV = 0.0;         // stops relative to 18% grey
     double softness = 0.0;        // 0..100
     double toeStrength = 0.0;     // -100..100: harden -> soften
-    double toeRangeEV = 4.0;      // 1..8 stops below 18% grey
+    double toeRangeEV = 4.0;      // 1..8 stops below Contrast Pivot
     double colourPreserve = 0.0;  // 0..100: RGB curve -> luminance-only
 };
 
@@ -40,11 +40,17 @@ inline double contrastPivotCode(double pivotEV)
                           kTransferDaVinciIntermediate);
 }
 
-inline double toeThresholdCode(double toeRangeEV)
+inline double toeThresholdCode(double pivotEV, double toeRangeEV)
 {
     const double range = std::max(1.0, std::min(toeRangeEV, 8.0));
-    const double lin = 0.18 * std::pow(2.0, -range);
+    const double lin = contrastPivotLinear(pivotEV) * std::pow(2.0, -range);
     return encodeTransfer(float(lin), kTransferDaVinciIntermediate);
+}
+
+// Convenience overload for tests/callers using the default 18% pivot.
+inline double toeThresholdCode(double toeRangeEV)
+{
+    return toeThresholdCode(0.0, toeRangeEV);
 }
 
 // Values that depend only on the controls are prepared once per render. This
@@ -70,7 +76,7 @@ inline PreparedContrast prepareContrast(const ContrastParams &p)
     q.softnessK = 4.0 *
         (std::max(0.0, std::min(p.softness, 100.0)) / 100.0);
     q.toe = std::max(-100.0, std::min(p.toeStrength, 100.0)) / 100.0;
-    q.toeThreshold = toeThresholdCode(p.toeRangeEV);
+    q.toeThreshold = toeThresholdCode(p.pivotEV, p.toeRangeEV);
     q.toeK = 10.0 * std::fabs(q.toe);
     q.preserve = std::max(0.0, std::min(p.colourPreserve, 100.0)) / 100.0;
     return q;
@@ -93,8 +99,9 @@ inline double applyContrastCode(double code, const PreparedContrast &p)
 
     // Independent bipolar low-end toe. Positive values compress the distance
     // below the threshold, lifting/softening the deepest shadows. Negative
-    // values expand that distance, deepening/hardening the toe. Both branches
-    // meet the unmodified curve with matching first derivative at the threshold.
+    // values expand that distance, deepening/hardening the toe. Toe Range is
+    // measured below Contrast Pivot, so moving Pivot moves the toe with it and
+    // the toe threshold always remains below the pivot itself.
     if (p.toe != 0.0 && y < p.toeThreshold) {
         const double dist = p.toeThreshold - y;
         const double shapedDist = p.toe > 0.0
