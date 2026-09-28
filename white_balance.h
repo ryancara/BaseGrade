@@ -136,19 +136,12 @@ struct WhitePoint {
     double cct;
 };
 
-inline constexpr WhitePoint kReferenceWhite[kGamutCount] = {
-    {0.31270, 0.32900, 6504.0}, // DWG D65
-    {0.31270, 0.32900, 6504.0}, // Rec.709 D65
-    {0.31270, 0.32900, 6504.0}, // Rec.2020 D65
-    {0.32168, 0.33767, 6000.0}, // ACEScg D60
-    {0.32168, 0.33767, 6000.0}, // ACES2065-1 D60
-    {0.31270, 0.32900, 6504.0}, // Adobe RGB D65
-    {0.34567, 0.35850, 5003.0}, // ProPhoto D50
-    {0.34567, 0.35850, 5003.0}, // ART sRGB D50
-    {0.34567, 0.35850, 5003.0}, // ART Adobe RGB D50
-    {0.34567, 0.35850, 5003.0}, // ART Rec.2020 D50
-    {0.34567, 0.35850, 5003.0}, // ART AP0 D50
-    {0.34567, 0.35850, 5003.0}  // ART AP1 D50
+// CCT is used only to establish the neutral point on the reciprocal-temperature
+// axis. The actual zero-control chromaticity comes from each RGB->XYZ matrix,
+// ensuring exact neutrality even for rounded ART matrix constants.
+inline constexpr double kReferenceCCT[kGamutCount] = {
+    6504.0, 6504.0, 6504.0, 6000.0, 6000.0, 6504.0,
+    5003.0, 5003.0, 5003.0, 5003.0, 5003.0, 5003.0
 };
 
 inline Mat3 rgbToXYZMatrix(int gamut)
@@ -160,9 +153,21 @@ inline Mat3 rgbToXYZMatrix(int gamut)
     return r;
 }
 
-inline Vec3 xyToXYZ(double x, double y)
+inline Vec3 referenceWhiteXYZ(int gamut)
 {
-    return {{x / y, 1.0, (1.0 - x - y) / y}};
+    const Mat3 rgbToXyz = rgbToXYZMatrix(gamut);
+    return mul(rgbToXyz, Vec3{{1.0, 1.0, 1.0}});
+}
+
+inline WhitePoint xyzToWhitePoint(const Vec3 &xyz, double cct)
+{
+    const double sum = xyz.v[0] + xyz.v[1] + xyz.v[2];
+    return {xyz.v[0] / sum, xyz.v[1] / sum, cct};
+}
+
+inline Vec3 xyToXYZ(double x, double y, double Y = 1.0)
+{
+    return {{x / y * Y, Y, (1.0 - x - y) / y * Y}};
 }
 
 struct UV {
@@ -218,14 +223,16 @@ inline WhitePoint planckianWhite(double kelvin)
 inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
 {
     gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
-    const WhitePoint ref = kReferenceWhite[gamut];
+    const double referenceCCT = kReferenceCCT[gamut];
+    const Vec3 sourceXYZ = referenceWhiteXYZ(gamut);
+    const WhitePoint ref = xyzToWhitePoint(sourceXYZ, referenceCCT);
 
-    double mired = 1.0e6 / ref.cct + temperature;
+    double mired = 1.0e6 / referenceCCT + temperature;
     mired = std::max(40.0, std::min(mired, 600.0));
     const double targetCCT = std::max(1667.0, std::min(1.0e6 / mired, 25000.0));
 
     const UV refUV = xyToUV(ref.x, ref.y);
-    const WhitePoint locusRefXY = planckianWhite(ref.cct);
+    const WhitePoint locusRefXY = planckianWhite(referenceCCT);
     const WhitePoint locusTargetXY = planckianWhite(targetCCT);
     const UV locusRef = xyToUV(locusRefXY.x, locusRefXY.y);
     const UV locusTarget = xyToUV(locusTargetXY.x, locusTargetXY.y);
@@ -256,8 +263,9 @@ inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
 
 inline Vec3 targetWhiteXYZ(int gamut, double temperature, double tint)
 {
+    const Vec3 source = referenceWhiteXYZ(gamut);
     const WhitePoint w = targetWhitePoint(gamut, temperature, tint);
-    return xyToXYZ(w.x, w.y);
+    return xyToXYZ(w.x, w.y, source.v[1]);
 }
 
 inline Vec3 targetWhiteRGB(int gamut, double temperature, double tint)
@@ -272,10 +280,13 @@ inline Mat3 makeWhiteBalanceTransform(int gamut, int method,
     gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
     method = std::max(0, std::min(method, int(kWhiteBalanceMethodCount) - 1));
 
+    // Guarantee the neutral setting is an exact identity, with no round-trip
+    // matrix noise or nominal-white mismatch.
+    if (temperature == 0.0 && tint == 0.0) return Mat3{};
+
     const Mat3 rgbToXyz = rgbToXYZMatrix(gamut);
     const Mat3 xyzToRgb = inverse(rgbToXyz);
-    const WhitePoint ref = kReferenceWhite[gamut];
-    const Vec3 sourceXYZ = xyToXYZ(ref.x, ref.y);
+    const Vec3 sourceXYZ = referenceWhiteXYZ(gamut);
     const Vec3 targetXYZ = targetWhiteXYZ(gamut, temperature, tint);
 
     if (method == kWhiteBalanceLinearRGB) {
