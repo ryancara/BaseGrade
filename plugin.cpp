@@ -1,55 +1,49 @@
 /*
- *  OFX port of the ART (Advanced RawTherapee) tone equalizer.
- *  GPL-3.0-or-later, see teq_core.h for attribution.
+ *  BaseGrade OpenFX plugin.
  *
- *  Input must be SCENE-LINEAR float RGB(A).  In DaVinci Resolve, put a Color
- *  Space Transform node (to linear) before this and one back after it.
+ *  Tone Equalizer core derived from ART. GPL-3.0-or-later; see teq_core.h.
+ *
+ *  BaseGrade decodes the selected input transfer to scene-linear RGB while
+ *  keeping the selected input gamut unchanged. The Tone Equalizer operates in
+ *  that linear gamut, using its RGB->XYZ Y row to build the luminance mask,
+ *  then the result is encoded back to the selected input transfer.
  */
 #include "ofxsImageEffect.h"
 #include "teq_core.h"
+#include "color_management.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
-#define kPluginName "ART Tone Equalizer"
+#define kPluginName "BaseGrade"
 #define kPluginGrouping "Color"
 #define kPluginDescription                                                     \
-    "Port of the tone equalizer from ART. Works on scene-linear RGB: an "      \
-    "edge-aware luminance mask selects tonal ranges, and per-band gains "      \
-    "(blacks/shadows/midtones/highlights/whites) are applied as a "            \
-    "multiplicative correction."
-#define kPluginIdentifier "org.example.ArtToneEqualizer"
-#define kPluginVersionMajor 1
-#define kPluginVersionMinor 0
+    "Photo-oriented primary grading controls for OpenFX. The current build "   \
+    "contains an ART-derived spatial Tone Equalizer with explicit input gamut "\
+    "and transfer handling."
+#define kPluginIdentifier "io.github.ryancara.BaseGrade"
+#define kPluginVersionMajor 0
+#define kPluginVersionMinor 2
 
 namespace {
 
 const char *kBandNames[5] = {"blacks", "shadows", "midtones", "highlights", "whites"};
 const char *kBandLabels[5] = {"Blacks", "Shadows", "Midtones", "Highlights", "Whites"};
 
-// Exact Y rows from ART's built-in D50-adapted working-space matrices
-// (rtengine/iccmatrices.h). Tone Equalizer uses workingSpaceMatrix() and
-// Color::rgbLuminance(), so these coefficients matter for parity.
-const float kLuma[6][3] = {
-    {0.2225045f, 0.7168786f,  0.0606169f}, // sRGB (ART working space)
-    {0.3111242f, 0.6256560f,  0.0632197f}, // Adobe RGB
-    {0.2880402f, 0.7118741f,  0.0000857f}, // ProPhoto
-    {0.2790177f, 0.6753402f,  0.0456377f}, // Rec2020 (ART default)
-    {0.3618807f, 0.72255045f, -0.0843859f},// ACESp0
-    {0.2844480f, 0.6717580f,  0.0437940f}  // ACESp1 / ACEScg
-};
-
-class ArtToneEq : public OFX::ImageEffect {
+class BaseGrade : public OFX::ImageEffect {
 public:
-    explicit ArtToneEq(OfxImageEffectHandle h) : OFX::ImageEffect(h)
+    explicit BaseGrade(OfxImageEffectHandle h) : OFX::ImageEffect(h)
     {
         dst_ = fetchClip(kOfxImageEffectOutputClipName);
         src_ = fetchClip(kOfxImageEffectSimpleSourceClipName);
+        gamut_ = fetchChoiceParam("inputGamut");
+        transfer_ = fetchChoiceParam("inputTransfer");
         for (int i = 0; i < 5; ++i) bands_[i] = fetchIntParam(kBandNames[i]);
         pivot_ = fetchDoubleParam("pivot");
-        detail_ = fetchIntParam("detail");
-        luma_ = fetchChoiceParam("lumaWeights");
+        regularization_ = fetchIntParam("detail"); // keep old ID for compatibility
+        regularizationScale_ = fetchDoubleParam("regularizationScale");
         showMap_ = fetchBooleanParam("showMap");
     }
 
@@ -64,36 +58,42 @@ public:
             dst->getPixelComponents() != OFX::ePixelComponentRGBA)
             OFX::throwSuiteStatusException(kOfxStatErrFormat);
 
+        int gamutIndex = bg::kGamutDWG;
+        int transferIndex = bg::kTransferDaVinciIntermediate;
+        gamut_->getValueAtTime(args.time, gamutIndex);
+        transfer_->getValueAtTime(args.time, transferIndex);
+        gamutIndex = std::max(0, std::min(gamutIndex, int(bg::kGamutCount) - 1));
+        transferIndex = std::max(0, std::min(transferIndex, int(bg::kTransferCount) - 1));
+        const float *lw = bg::lumaWeights(gamutIndex);
+
         teq::Params pp;
         for (int i = 0; i < 5; ++i) pp.bands[i] = bands_[i]->getValueAtTime(args.time);
         pp.pivot = pivot_->getValueAtTime(args.time);
-        pp.regularization = detail_->getValueAtTime(args.time);
+        pp.regularization = regularization_->getValueAtTime(args.time);
+        pp.regularizationScale = regularizationScale_->getValueAtTime(args.time);
         const bool showMap = showMap_->getValueAtTime(args.time);
-        int lumaIndex = 0;
-        luma_->getValueAtTime(args.time, lumaIndex);
-        lumaIndex = std::max(0, std::min(lumaIndex, 5));
-        const float *lw = kLuma[lumaIndex];
 
         teq::ToneEqualizer eq(pp);
-        const float gain = teq::ToneEqualizer::pivotGain(pp.pivot);
+        const float pivotGain = teq::ToneEqualizer::pivotGain(pp.pivot);
 
-        // The mask is computed over the whole source image (tiles are
-        // disabled in describe(), so this equals the render window).
         const OfxRectI sb = src->getBounds();
         const int sw = sb.x2 - sb.x1, sh = sb.y2 - sb.y1;
         std::vector<const float *> srcRows(sh);
         for (int y = 0; y < sh; ++y)
             srcRows[y] = static_cast<const float *>(src->getPixelAddress(sb.x1, sb.y1 + y));
 
+        // Build the spatial mask from scene-linear RGB in the selected gamut.
         teq::Plane Y(sw, sh);
         teq::parallelRange(sh, [&](int y0, int y1) {
             for (int y = y0; y < y1; ++y) {
                 const float *p = srcRows[y];
                 float *yr = Y.row(y);
                 for (int x = 0; x < sw; ++x) {
-                    float l = (lw[0] * p[4 * x] + lw[1] * p[4 * x + 1] +
-                               lw[2] * p[4 * x + 2]) * gain;
-                    if (!(l > 1e-5f)) l = 1e-5f; // also catches NaN
+                    const float r = bg::decodeTransfer(p[4 * x], transferIndex);
+                    const float g = bg::decodeTransfer(p[4 * x + 1], transferIndex);
+                    const float b = bg::decodeTransfer(p[4 * x + 2], transferIndex);
+                    float l = (lw[0] * r + lw[1] * g + lw[2] * b) * pivotGain;
+                    if (!(l > 1e-5f)) l = 1e-5f; // also catches NaN/negative mask luma
                     yr[x] = l > 32.f ? 32.f : l;
                 }
             }
@@ -122,12 +122,19 @@ public:
                     const float *s = srcRows[sy] + 4 * sx;
                     const float ym = Y.row(sy)[sx];
                     if (showMap) {
-                        eq.color(ym, d);
+                        float map[3];
+                        eq.color(ym, map);
+                        d[0] = bg::encodeTransfer(map[0], transferIndex);
+                        d[1] = bg::encodeTransfer(map[1], transferIndex);
+                        d[2] = bg::encodeTransfer(map[2], transferIndex);
                     } else {
                         const float c = eq.correction(ym);
-                        d[0] = s[0] * c;
-                        d[1] = s[1] * c;
-                        d[2] = s[2] * c;
+                        const float r = bg::decodeTransfer(s[0], transferIndex) * c;
+                        const float g = bg::decodeTransfer(s[1], transferIndex) * c;
+                        const float b = bg::decodeTransfer(s[2], transferIndex) * c;
+                        d[0] = bg::encodeTransfer(r, transferIndex);
+                        d[1] = bg::encodeTransfer(g, transferIndex);
+                        d[2] = bg::encodeTransfer(b, transferIndex);
                     }
                     d[3] = s[3];
                 }
@@ -137,16 +144,18 @@ public:
 
 private:
     OFX::Clip *dst_ = nullptr, *src_ = nullptr;
+    OFX::ChoiceParam *gamut_ = nullptr;
+    OFX::ChoiceParam *transfer_ = nullptr;
     OFX::IntParam *bands_[5] = {};
     OFX::DoubleParam *pivot_ = nullptr;
-    OFX::IntParam *detail_ = nullptr;
-    OFX::ChoiceParam *luma_ = nullptr;
+    OFX::IntParam *regularization_ = nullptr;
+    OFX::DoubleParam *regularizationScale_ = nullptr;
     OFX::BooleanParam *showMap_ = nullptr;
 };
 
-mDeclarePluginFactory(ArtToneEqFactory, {}, {});
+mDeclarePluginFactory(BaseGradeFactory, {}, {});
 
-void ArtToneEqFactory::describe(OFX::ImageEffectDescriptor &desc)
+void BaseGradeFactory::describe(OFX::ImageEffectDescriptor &desc)
 {
     desc.setLabels(kPluginName, kPluginName, kPluginName);
     desc.setPluginGrouping(kPluginGrouping);
@@ -157,14 +166,14 @@ void ArtToneEqFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setSingleInstance(false);
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
-    desc.setSupportsTiles(false); // the mask needs the whole frame
+    desc.setSupportsTiles(false); // regularisation needs the whole frame
     desc.setTemporalClipAccess(false);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
 }
 
-void ArtToneEqFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
+void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
                                          OFX::ContextEnum /*context*/)
 {
     OFX::ClipDescriptor *sc = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
@@ -179,13 +188,44 @@ void ArtToneEqFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
 
     OFX::PageParamDescriptor *page = desc.definePageParam("Controls");
 
+    {
+        OFX::ChoiceParamDescriptor *p = desc.defineChoiceParam("inputGamut");
+        p->setLabels("Input Gamut", "Input Gamut", "Input Gamut");
+        p->appendOption("DaVinci Wide Gamut");
+        p->appendOption("Rec.709 / sRGB");
+        p->appendOption("Rec.2020");
+        p->appendOption("ACEScg (AP1)");
+        p->appendOption("ACES2065-1 (AP0)");
+        p->appendOption("Adobe RGB");
+        p->appendOption("ProPhoto RGB");
+        p->appendOption("ART sRGB (D50 parity)");
+        p->appendOption("ART Adobe RGB (D50 parity)");
+        p->appendOption("ART Rec2020 (D50 parity)");
+        p->appendOption("ART ACESp0 (D50 parity)");
+        p->appendOption("ART ACESp1 (D50 parity)");
+        p->setDefault(bg::kGamutDWG);
+        p->setHint("Selects the linear RGB gamut used to calculate luminance. "
+                   "BaseGrade does not convert the gamut internally.");
+        page->addChild(*p);
+    }
+    {
+        OFX::ChoiceParamDescriptor *p = desc.defineChoiceParam("inputTransfer");
+        p->setLabels("Input Transfer", "Input Transfer", "Input Transfer");
+        p->appendOption("DaVinci Intermediate");
+        p->appendOption("Linear");
+        p->setDefault(bg::kTransferDaVinciIntermediate);
+        p->setHint("Transfer function of the incoming RGB values. BaseGrade "
+                   "decodes to scene-linear for processing and re-encodes afterwards.");
+        page->addChild(*p);
+    }
+
     for (int i = 0; i < 5; ++i) {
         OFX::IntParamDescriptor *p = desc.defineIntParam(kBandNames[i]);
         p->setLabels(kBandLabels[i], kBandLabels[i], kBandLabels[i]);
         p->setDefault(0);
         p->setRange(-100, 100);
         p->setDisplayRange(-100, 100);
-        p->setHint("Gain for this tonal range (-100..100).");
+        p->setHint("ART-compatible adjustment for this tonal range (-100..100).");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -196,48 +236,46 @@ void ArtToneEqFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(0.0);
         p->setRange(-12.0, 12.0);
         p->setDisplayRange(-12.0, 12.0);
-        p->setHint("Exposure shift applied to the mask only; slides the tonal "
-                   "bands along the histogram.");
+        p->setHint("Slides the Tone Equalizer's tonal bands along the exposure range.");
         page->addChild(*p);
     }
     {
+        // Retain the original internal ID "detail" so settings from the ART
+        // parity build remain readable, while exposing ART's UI name.
         OFX::IntParamDescriptor *p = desc.defineIntParam("detail");
-        p->setLabels("Detail", "Detail", "Detail");
+        p->setLabels("Regularization", "Regularization", "Regularization");
         p->setDefault(4);
         p->setRange(0, 4);
         p->setDisplayRange(0, 4);
-        p->setHint("Mask regularization (ART's 'Detail'): 0 follows the image "
-                   "closely, 4 is smoothest.");
+        p->setHint("ART-compatible local-contrast preservation. 0 follows raw "
+                   "pixel luminance most closely; 4 is most regularized.");
         page->addChild(*p);
     }
     {
-        OFX::ChoiceParamDescriptor *p = desc.defineChoiceParam("lumaWeights");
-        p->setLabels("Luminance weights", "Luminance weights", "Luminance weights");
-        p->appendOption("sRGB (ART)");
-        p->appendOption("Adobe RGB");
-        p->appendOption("ProPhoto");
-        p->appendOption("Rec2020 (ART default)");
-        p->appendOption("ACESp0");
-        p->appendOption("ACESp1 / ACEScg");
-        p->setDefault(3);
-        p->setHint("ART working-space matrix used to compute luminance. For "
-                   "comparison tests, choose the same working space in ART.");
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("regularizationScale");
+        p->setLabels("Regularization Scale", "Regularization Scale", "Regularization Scale");
+        p->setDoubleType(OFX::eDoubleTypeScale);
+        p->setDefault(1.0);
+        p->setRange(0.05, 8.0);
+        p->setDisplayRange(0.25, 4.0);
+        p->setHint("Spatial scale of the large regularization pass. 1.0x is "
+                   "ART's original 350-pixel full-resolution radius.");
         page->addChild(*p);
     }
     {
         OFX::BooleanParamDescriptor *p = desc.defineBooleanParam("showMap");
         p->setLabels("Show colour map", "Show colour map", "Show colour map");
         p->setDefault(false);
-        p->setHint("Display the tonal mask as colours: purple=blacks, "
-                   "blue=shadows, grey=midtones, yellow=highlights, red=whites.");
+        p->setHint("Diagnostic tonal map: purple=blacks, blue=shadows, "
+                   "grey=midtones, yellow=highlights, red=whites.");
         page->addChild(*p);
     }
 }
 
-OFX::ImageEffect *ArtToneEqFactory::createInstance(OfxImageEffectHandle handle,
+OFX::ImageEffect *BaseGradeFactory::createInstance(OfxImageEffectHandle handle,
                                                    OFX::ContextEnum)
 {
-    return new ArtToneEq(handle);
+    return new BaseGrade(handle);
 }
 
 } // namespace
@@ -246,7 +284,7 @@ namespace OFX {
 namespace Plugin {
 void getPluginIDs(OFX::PluginFactoryArray &ids)
 {
-    static ArtToneEqFactory p(kPluginIdentifier, kPluginVersionMajor, kPluginVersionMinor);
+    static BaseGradeFactory p(kPluginIdentifier, kPluginVersionMajor, kPluginVersionMinor);
     ids.push_back(&p);
 }
 } // namespace Plugin
