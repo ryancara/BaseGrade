@@ -1,6 +1,7 @@
 #include "../teq_core.h"
 #include "../color_management.h"
 #include "../exposure.h"
+#include "../white_balance.h"
 #include "../regularization.h"
 #include <chrono>
 #include <cmath>
@@ -64,6 +65,37 @@ int main()
           "+2 EV exposure gain should be 4x");
     check(std::fabs(bg::applyExposure(0.18f, bg::exposureGain(1.0)) - 0.36f) < 1e-7f,
           "+1 EV should map linear 18% grey to 36%");
+
+    // White balance: zero Temp/Tint must be identity in every supported gamut
+    // for both methods. Non-zero controls must map neutral RGB to the same
+    // target white regardless of the selected adaptation method.
+    for (int g = 0; g < int(bg::kGamutCount); ++g) {
+        for (int method = 0; method < int(bg::kWhiteBalanceMethodCount); ++method) {
+            const bg::Mat3 id = bg::makeWhiteBalanceTransform(g, method, 0.0, 0.0);
+            float r, gg, b;
+            bg::applyWhiteBalance(id, 0.23f, 0.41f, 0.79f, r, gg, b);
+            check(std::fabs(r - 0.23f) < 2e-5f &&
+                  std::fabs(gg - 0.41f) < 2e-5f &&
+                  std::fabs(b - 0.79f) < 2e-5f,
+                  "zero Temp/Tint should be identity for every gamut and method");
+
+            const double temp = 40.0;
+            const double tint = 25.0;
+            const bg::Mat3 wb = bg::makeWhiteBalanceTransform(g, method, temp, tint);
+            bg::applyWhiteBalance(wb, 1.f, 1.f, 1.f, r, gg, b);
+            const bg::Vec3 target = bg::targetWhiteRGB(g, temp, tint);
+            check(std::fabs(double(r) - target.v[0]) < 3e-5 &&
+                  std::fabs(double(gg) - target.v[1]) < 3e-5 &&
+                  std::fabs(double(b) - target.v[2]) < 3e-5,
+                  "both white-balance methods should map neutral to the same target white");
+        }
+    }
+    {
+        const bg::Vec3 warm = bg::targetWhiteRGB(bg::kGamutDWG, 50.0, 0.0);
+        const bg::Vec3 cool = bg::targetWhiteRGB(bg::kGamutDWG, -50.0, 0.0);
+        check(warm.v[0] / warm.v[2] > cool.v[0] / cool.v[2],
+              "positive Temperature should be warmer than negative Temperature");
+    }
 
     // Every luminance row should map neutral RGB (R=G=B) to the same neutral Y.
     for (int g = 0; g < int(bg::kGamutCount); ++g) {
