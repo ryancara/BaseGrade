@@ -1,5 +1,6 @@
 #include "../teq_core.h"
 #include "../color_management.h"
+#include "../exposure.h"
 #include "../regularization.h"
 #include <chrono>
 #include <cmath>
@@ -52,6 +53,18 @@ static float run(const Params &pp, const Plane &scene, float px, float py,
 
 int main()
 {
+    // Scene-linear photographic exposure: one stop is exactly a factor of two.
+    check(bg::exposureGain(0.0) == 1.f,
+          "0 EV exposure gain should be identity");
+    check(std::fabs(bg::exposureGain(1.0) - 2.f) < 1e-7f,
+          "+1 EV exposure gain should be 2x");
+    check(std::fabs(bg::exposureGain(-1.0) - 0.5f) < 1e-7f,
+          "-1 EV exposure gain should be 0.5x");
+    check(std::fabs(bg::exposureGain(2.0) - 4.f) < 1e-7f,
+          "+2 EV exposure gain should be 4x");
+    check(std::fabs(bg::applyExposure(0.18f, bg::exposureGain(1.0)) - 0.36f) < 1e-7f,
+          "+1 EV should map linear 18% grey to 36%");
+
     // Every luminance row should map neutral RGB (R=G=B) to the same neutral Y.
     for (int g = 0; g < int(bg::kGamutCount); ++g) {
         const float *lw = bg::lumaWeights(g);
