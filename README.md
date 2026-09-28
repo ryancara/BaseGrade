@@ -22,6 +22,18 @@ This branch adds:
 
 No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, uses that gamut's RGB-to-XYZ Y coefficients to build the Tone Equalizer mask, applies the correction in linear light, and then re-encodes to the selected transfer.
 
+### Regularization Scale
+
+ART uses a small ~5 px guided-filter conditioning pass and, for Regularization levels 2-4, a much larger 350 px full-resolution regularization pass.
+
+BaseGrade's **Regularization Scale** changes only the large pass:
+
+- `0.5x` = approximately 175 px
+- `1.0x` = ART's original 350 px behaviour
+- `2.0x` = approximately 700 px
+
+The small ART conditioning pass remains unchanged. At exactly `1.0x`, BaseGrade calls the original ART-compatible `filterMask()` path directly. Away from `1.0x`, the scaled large radius is snapped to a multiple of five so ART's fast guided filter retains predictable 5x subsampling instead of occasionally falling back to full-resolution filtering at prime radii.
+
 ### Current transfers
 
 - DaVinci Intermediate
@@ -88,8 +100,11 @@ The host-independent test suite checks:
 - ART-style box-filter border behaviour
 - guided-filter subsampling behaviour
 - Tone Equalizer smoke tests across Regularization 0-4
+- every luminance coefficient row sums to approximately 1
 - DaVinci Intermediate's published 18% grey mapping
 - DaVinci Intermediate encode/decode round-trips, including negative and HDR values
+- Regularization Scale `1.0x` is bit-identical to the ART reference path
+- scaled large radii retain 5x fast-guided-filter subsampling across a radius sweep
 
 Run with:
 
