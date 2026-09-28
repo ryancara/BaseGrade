@@ -215,31 +215,10 @@ inline WhitePoint planckianWhite(double kelvin)
     return {x, y, T};
 }
 
-// Preserve the original 1 mired/unit response from -100..+100, then compress
-// the additional -200..-100 and +100..+200 ranges so the endpoints reach the
-// Planckian model's 25000 K and 1667 K limits without changing normal grading
-// behaviour.
-inline double temperatureMiredShift(int gamut, double temperature)
-{
-    gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
-    const double t = std::max(-200.0, std::min(temperature, 200.0));
-    if (t >= -100.0 && t <= 100.0) return t;
-
-    const double referenceMired = 1.0e6 / kReferenceCCT[gamut];
-    if (t > 100.0) {
-        const double maxWarmShift = 600.0 - referenceMired;
-        const double alpha = (t - 100.0) / 100.0;
-        return 100.0 + alpha * (maxWarmShift - 100.0);
-    }
-
-    const double maxCoolShift = 40.0 - referenceMired;
-    const double alpha = (-t - 100.0) / 100.0;
-    return -100.0 + alpha * (maxCoolShift + 100.0);
-}
-
-// Temperature is a relative reciprocal-temperature control. Tint is mapped to
-// a perpendicular displacement in CIE 1960 UCS. Positive Tint moves toward
-// magenta; 100 units correspond to roughly 0.02 uv.
+// Temperature is a strictly linear reciprocal-temperature control: one unit
+// always equals one mired. Tint is mapped to a perpendicular displacement in
+// CIE 1960 UCS. Positive Tint moves toward magenta; 100 units correspond to
+// roughly 0.02 uv.
 inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
 {
     gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
@@ -248,7 +227,7 @@ inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
     const WhitePoint ref = xyzToWhitePoint(sourceXYZ, referenceCCT);
 
     const double referenceMired = 1.0e6 / referenceCCT;
-    double mired = referenceMired + temperatureMiredShift(gamut, temperature);
+    double mired = referenceMired + temperature;
     mired = std::max(40.0, std::min(mired, 600.0));
     const double targetCCT = std::max(1667.0, std::min(1.0e6 / mired, 25000.0));
 
