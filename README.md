@@ -2,42 +2,43 @@
 
 BaseGrade is an OpenFX image-grading plugin aimed at bringing photo-oriented primary controls to DaVinci Resolve and other OFX hosts.
 
-The current codebase begins with a working port of ART's Tone Equalizer. The first development goal is to preserve a known-good ART-parity baseline before adding BaseGrade-specific features.
+The project began with a close port of ART's Tone Equalizer. The `main` branch is the known-working ART-parity baseline; development branches add BaseGrade-specific features while keeping the ART-derived core clean and independently testable.
 
-## Current status
+## Current feature branch
 
-The current OFX build has been compiled on Apple Silicon macOS against the Academy Software Foundation OpenFX SDK and loaded successfully in DaVinci Resolve.
+`feature/basegrade-input-and-regularization`
 
-The Tone Equalizer currently provides:
+This branch adds:
 
-- Blacks
-- Shadows
-- Midtones
-- Highlights
-- Whites
-- Pivot
-- ART-style spatial regularisation
-- ART working-space luminance matrices
-- diagnostic colour-map preview
+- plugin/bundle name changed to **BaseGrade**
+- stable plugin identifier `io.github.ryancara.BaseGrade`
+- **Input Gamut** selection
+- **Input Transfer** selection
+- DaVinci Wide Gamut support
+- native DaVinci Intermediate decode/process/re-encode
+- **Detail** renamed in the UI to **Regularization**
+- **Regularization Scale**, with `1.0x` equal to ART's original spatial scale
+- ART parity gamut options retained for comparison testing
 
-At this baseline stage the plugin expects **scene-linear float RGB(A)** input. In Resolve, use a CST to linear before the plugin and a CST back afterwards.
+No hidden gamut conversion is performed. BaseGrade decodes the selected transfer to scene-linear RGB, keeps the RGB values in the selected gamut, uses that gamut's RGB-to-XYZ Y coefficients to build the Tone Equalizer mask, applies the correction in linear light, and then re-encodes to the selected transfer.
 
-## Roadmap
+### Current transfers
 
-Planned BaseGrade controls include:
+- DaVinci Intermediate
+- Linear
 
-- native input gamut selection
-- native input transfer/gamma selection, including DaVinci Intermediate
+The default is **DaVinci Wide Gamut / DaVinci Intermediate**, matching a common Resolve working pipeline.
+
+For direct comparison against ART, choose **Linear** plus the corresponding `ART ... (D50 parity)` gamut entry.
+
+## Planned controls
+
 - Exposure
 - Temperature
 - Tint
-- Tone Equalizer
-- Regularization
-- Regularization Scale
 - Contrast
-- adjustable luminance-only contribution for Contrast
-
-The ART-compatible behaviour will remain the reference/default for the Tone Equalizer while BaseGrade-specific extensions are added separately.
+- Contrast luminance/RGB mix
+- additional input transfer functions where useful
 
 ## Build prerequisites
 
@@ -66,31 +67,36 @@ ctest --test-dir build --output-on-failure
 The bundle is produced at:
 
 ```text
-build/ArtToneEq.ofx.bundle
+build/BaseGrade.ofx.bundle
 ```
 
-For local testing, ad-hoc signing may be useful:
+For local testing:
 
 ```bash
-codesign --force --deep --sign - build/ArtToneEq.ofx.bundle
-```
-
-Install system-wide on macOS:
-
-```bash
+codesign --force --deep --sign - build/BaseGrade.ofx.bundle
 sudo mkdir -p /Library/OFX/Plugins
-sudo cp -R build/ArtToneEq.ofx.bundle /Library/OFX/Plugins/
-sudo xattr -dr com.apple.quarantine /Library/OFX/Plugins/ArtToneEq.ofx.bundle
+sudo cp -R build/BaseGrade.ofx.bundle /Library/OFX/Plugins/
+sudo xattr -dr com.apple.quarantine /Library/OFX/Plugins/BaseGrade.ofx.bundle
 ```
 
 Then fully restart Resolve.
 
-## ART parity
+## Tests
 
-The Tone Equalizer core is derived from ART's `rtengine/iptoneequalizer.cc` and guided-filter implementation, which in turn contains work derived from darktable and RawTherapee.
+The host-independent test suite checks:
 
-For parity testing, use matching linear working spaces in ART and the plugin, render at full resolution, and compare results in EV. Spatially regularised cases should be compared with a small numerical tolerance because ART uses single-precision recursive filtering.
+- ART-style box-filter border behaviour
+- guided-filter subsampling behaviour
+- Tone Equalizer smoke tests across Regularization 0-4
+- DaVinci Intermediate's published 18% grey mapping
+- DaVinci Intermediate encode/decode round-trips, including negative and HDR values
 
-## Licence
+Run with:
 
-GPL-3.0-or-later. See source-file attribution and `LICENSE`.
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+## Licensing and attribution
+
+The Tone Equalizer core is derived from ART's `rtengine/iptoneequalizer.cc` and guided-filter implementation, which in turn contains work derived from darktable and RawTherapee. The derived source is GPL-3.0-or-later; attribution is retained in `teq_core.h`.
