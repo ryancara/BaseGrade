@@ -14,6 +14,7 @@
 #include "exposure.h"
 #include "white_balance.h"
 #include "contrast.h"
+#include "contrast_overlay.h"
 #include "regularization.h"
 
 #include <algorithm>
@@ -30,7 +31,7 @@
     "explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 6
+#define kPluginVersionMinor 7
 
 namespace {
 
@@ -233,6 +234,7 @@ void BaseGradeFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
+    desc.setOverlayInteractDescriptor(new bg::ContrastCurveOverlayDescriptor);
 }
 
 void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
@@ -421,13 +423,16 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         page->addChild(*p);
     }
     {
+        // Keep the internal ID stable while presenting the bipolar control as
+        // Toe Amount in the UI.
         OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("toeStrength");
-        p->setLabels("Toe Strength", "Toe Strength", "Toe Strength");
+        p->setLabels("Toe Amount", "Toe Amount", "Toe Amount");
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
-        p->setRange(0.0, 100.0);
-        p->setDisplayRange(0.0, 100.0);
-        p->setHint("Adds smooth low-end compression below the Toe Range threshold.");
+        p->setRange(-100.0, 100.0);
+        p->setDisplayRange(-100.0, 100.0);
+        p->setHint("Shapes the low end below Toe Range. Positive values soften "
+                   "and lift the toe; negative values deepen and harden it.");
         p->setAnimates(true);
         page->addChild(*p);
     }
@@ -453,6 +458,14 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setHint("Blends contrast processing from regular per-channel RGB "
                    "curves at 0% to luminance-only contrast at 100%.");
         p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::BooleanParamDescriptor *p = desc.defineBooleanParam("showCurve");
+        p->setLabels("Show Curve", "Show Curve", "Show Curve");
+        p->setDefault(false);
+        p->setHint("Shows the current scalar contrast/toe curve as a viewer-only "
+                   "overlay. The overlay is never rendered into the image.");
         page->addChild(*p);
     }
 }
