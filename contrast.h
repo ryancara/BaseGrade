@@ -47,23 +47,47 @@ inline double toeThresholdCode(double toeRangeEV)
     return encodeTransfer(float(lin), kTransferDaVinciIntermediate);
 }
 
-inline double applyContrastCode(double code, const ContrastParams &p)
-{
-    if (contrastIdentity(p)) return code;
+// Values that depend only on the controls are prepared once per render. This
+// avoids recomputing pow/log-derived pivot, slope and toe constants for every
+// channel of every pixel.
+struct PreparedContrast {
+    bool identity = true;
+    double pivotCode = 0.0;
+    double slope = 1.0;
+    double softnessK = 0.0;
+    double toe = 0.0;
+    double toeThreshold = 0.0;
+    double toeK = 0.0;
+    double preserve = 0.0;
+};
 
-    const double pivot = contrastPivotCode(p.pivotEV);
-    const double slope = contrastSlope(p.contrast);
-    const double fromPivot = code - pivot;
-    double delta = (slope - 1.0) * fromPivot;
+inline PreparedContrast prepareContrast(const ContrastParams &p)
+{
+    PreparedContrast q;
+    q.identity = contrastIdentity(p);
+    q.pivotCode = contrastPivotCode(p.pivotEV);
+    q.slope = contrastSlope(p.contrast);
+    q.softnessK = 4.0 *
+        (std::max(0.0, std::min(p.softness, 100.0)) / 100.0);
+    q.toe = std::max(-100.0, std::min(p.toeStrength, 100.0)) / 100.0;
+    q.toeThreshold = toeThresholdCode(p.toeRangeEV);
+    q.toeK = 10.0 * std::fabs(q.toe);
+    q.preserve = std::max(0.0, std::min(p.colourPreserve, 100.0)) / 100.0;
+    return q;
+}
+
+inline double applyContrastCode(double code, const PreparedContrast &p)
+{
+    if (p.identity) return code;
+
+    const double fromPivot = code - p.pivotCode;
+    double delta = (p.slope - 1.0) * fromPivot;
 
     // Softness rolls off only the extra contrast displacement. This means it
     // cannot create a tone curve by itself when Contrast is zero, while the
     // derivative at the pivot still equals the requested contrast slope.
-    const double softness = std::max(0.0, std::min(p.softness, 100.0)) / 100.0;
-    if (softness > 0.0 && delta != 0.0) {
-        const double k = 4.0 * softness;
-        delta /= 1.0 + k * std::fabs(fromPivot);
-    }
+    if (p.softnessK > 0.0 && delta != 0.0)
+        delta /= 1.0 + p.softnessK * std::fabs(fromPivot);
 
     double y = code + delta;
 
@@ -71,35 +95,46 @@ inline double applyContrastCode(double code, const ContrastParams &p)
     // below the threshold, lifting/softening the deepest shadows. Negative
     // values expand that distance, deepening/hardening the toe. Both branches
     // meet the unmodified curve with matching first derivative at the threshold.
-    const double toe = std::max(-100.0, std::min(p.toeStrength, 100.0)) / 100.0;
-    if (toe != 0.0) {
-        const double threshold = toeThresholdCode(p.toeRangeEV);
-        if (y < threshold) {
-            const double dist = threshold - y;
-            const double k = 10.0 * std::fabs(toe);
-            const double shapedDist = toe > 0.0
-                ? dist / (1.0 + k * dist)
-                : dist * (1.0 + k * dist);
-            y = threshold - shapedDist;
-        }
+    if (p.toe != 0.0 && y < p.toeThreshold) {
+        const double dist = p.toeThreshold - y;
+        const double shapedDist = p.toe > 0.0
+            ? dist / (1.0 + p.toeK * dist)
+            : dist * (1.0 + p.toeK * dist);
+        y = p.toeThreshold - shapedDist;
     }
 
     return y;
 }
 
-inline float applyContrastScalar(float linear, const ContrastParams &p)
+inline double applyContrastCode(double code, const ContrastParams &p)
 {
-    if (contrastIdentity(p)) return linear;
+    return applyContrastCode(code, prepareContrast(p));
+}
+
+inline float applyContrastScalar(float linear, const PreparedContrast &p)
+{
+    if (p.identity) return linear;
     const double code = encodeTransfer(linear, kTransferDaVinciIntermediate);
     const double shaped = applyContrastCode(code, p);
     return decodeTransfer(float(shaped), kTransferDaVinciIntermediate);
 }
 
-inline void applyContrastRGB(const ContrastParams &p, const float *lw,
+inline float applyContrastScalar(float linear, const ContrastParams &p)
+{
+    return applyContrastScalar(linear, prepareContrast(p));
+}
+
+inline double smoothstep01(double a, double b, double x)
+{
+    const double t = std::max(0.0, std::min(1.0, (x - a) / (b - a)));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+inline void applyContrastRGB(const PreparedContrast &p, const float *lw,
                              float r, float g, float b,
                              float &outR, float &outG, float &outB)
 {
-    if (contrastIdentity(p)) {
+    if (p.identity) {
         outR = r;
         outG = g;
         outB = b;
@@ -110,9 +145,7 @@ inline void applyContrastRGB(const ContrastParams &p, const float *lw,
     const float rgbG = applyContrastScalar(g, p);
     const float rgbB = applyContrastScalar(b, p);
 
-    const double preserve =
-        std::max(0.0, std::min(p.colourPreserve, 100.0)) / 100.0;
-    if (preserve <= 0.0) {
+    if (p.preserve <= 0.0) {
         outR = rgbR;
         outG = rgbG;
         outB = rgbB;
@@ -121,10 +154,18 @@ inline void applyContrastRGB(const ContrastParams &p, const float *lw,
 
     const double Y = double(lw[0]) * r + double(lw[1]) * g + double(lw[2]) * b;
 
-    // A luminance ratio is not meaningful for non-positive or near-zero Y,
-    // especially in very wide gamuts with negative luminance coefficients.
-    // Fall back to the regular RGB curve instead of creating a huge Y'/Y gain.
-    if (!(Y > 1.0e-6) || !std::isfinite(Y)) {
+    // A luminance ratio is only meaningful when Y is a sane fraction of the
+    // brightest channel and is high enough for Y'/Y to express the curve near
+    // black. Fade toward the ordinary RGB result rather than hard-switching,
+    // which avoids discontinuities and protects saturated wide-gamut blues.
+    const double mx = std::max(r, std::max(g, b));
+    double confidence = 0.0;
+    if (std::isfinite(Y) && Y > 0.0 && mx > 0.0) {
+        confidence = smoothstep01(0.02, 0.15, Y / mx) *
+                     smoothstep01(2.0e-4, 2.0e-3, Y);
+    }
+    const double eff = p.preserve * confidence;
+    if (!(eff > 0.0)) {
         outR = rgbR;
         outG = rgbG;
         outB = rgbB;
@@ -140,9 +181,17 @@ inline void applyContrastRGB(const ContrastParams &p, const float *lw,
     const float lumG = float(double(g) * gain);
     const float lumB = float(double(b) * gain);
 
-    outR = float((1.0 - preserve) * rgbR + preserve * lumR);
-    outG = float((1.0 - preserve) * rgbG + preserve * lumG);
-    outB = float((1.0 - preserve) * rgbB + preserve * lumB);
+    outR = float((1.0 - eff) * rgbR + eff * lumR);
+    outG = float((1.0 - eff) * rgbG + eff * lumG);
+    outB = float((1.0 - eff) * rgbB + eff * lumB);
+}
+
+inline void applyContrastRGB(const ContrastParams &p, const float *lw,
+                             float r, float g, float b,
+                             float &outR, float &outG, float &outB)
+{
+    const PreparedContrast q = prepareContrast(p);
+    applyContrastRGB(q, lw, r, g, b, outR, outG, outB);
 }
 
 } // namespace bg
