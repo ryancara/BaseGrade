@@ -188,9 +188,7 @@ inline WhitePoint uvToWhitePoint(double u, double v, double cct)
 }
 
 // Kim et al. approximation to the CIE 1931 Planckian locus, valid over
-// 1667-25000 K. Temperature is intentionally handled in reciprocal-temperature
-// (mired) space because equal mired shifts move much more uniformly along the
-// locus than equal Kelvin shifts.
+// 1667-25000 K.
 inline WhitePoint planckianWhite(double kelvin)
 {
     const double T = std::max(1667.0, std::min(kelvin, 25000.0));
@@ -217,9 +215,31 @@ inline WhitePoint planckianWhite(double kelvin)
     return {x, y, T};
 }
 
-// Temperature is a relative mired shift: + values warm, - values cool.
-// Tint is mapped to a perpendicular displacement in CIE 1960 UCS. Positive
-// Tint moves toward magenta; 100 units correspond to roughly 0.02 uv.
+// Preserve the original 1 mired/unit response from -100..+100, then compress
+// the additional -200..-100 and +100..+200 ranges so the endpoints reach the
+// Planckian model's 25000 K and 1667 K limits without changing normal grading
+// behaviour.
+inline double temperatureMiredShift(int gamut, double temperature)
+{
+    gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
+    const double t = std::max(-200.0, std::min(temperature, 200.0));
+    if (t >= -100.0 && t <= 100.0) return t;
+
+    const double referenceMired = 1.0e6 / kReferenceCCT[gamut];
+    if (t > 100.0) {
+        const double maxWarmShift = 600.0 - referenceMired;
+        const double alpha = (t - 100.0) / 100.0;
+        return 100.0 + alpha * (maxWarmShift - 100.0);
+    }
+
+    const double maxCoolShift = 40.0 - referenceMired;
+    const double alpha = (-t - 100.0) / 100.0;
+    return -100.0 + alpha * (maxCoolShift + 100.0);
+}
+
+// Temperature is a relative reciprocal-temperature control. Tint is mapped to
+// a perpendicular displacement in CIE 1960 UCS. Positive Tint moves toward
+// magenta; 100 units correspond to roughly 0.02 uv.
 inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
 {
     gamut = std::max(0, std::min(gamut, int(kGamutCount) - 1));
@@ -227,7 +247,8 @@ inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
     const Vec3 sourceXYZ = referenceWhiteXYZ(gamut);
     const WhitePoint ref = xyzToWhitePoint(sourceXYZ, referenceCCT);
 
-    double mired = 1.0e6 / referenceCCT + temperature;
+    const double referenceMired = 1.0e6 / referenceCCT;
+    double mired = referenceMired + temperatureMiredShift(gamut, temperature);
     mired = std::max(40.0, std::min(mired, 600.0));
     const double targetCCT = std::max(1667.0, std::min(1.0e6 / mired, 25000.0));
 
@@ -251,7 +272,7 @@ inline WhitePoint targetWhitePoint(int gamut, double temperature, double tint)
     if (len > 0.0) {
         tu /= len;
         tv /= len;
-        const double duv = tint * 0.0002;
+        const double duv = std::max(-200.0, std::min(tint, 200.0)) * 0.0002;
         // (-tv, tu) points toward the magenta side of the locus for increasing
         // temperature in the CIE 1960 u,v plane.
         target.u += (-tv) * duv;
