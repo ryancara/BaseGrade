@@ -65,6 +65,13 @@ if(BUILD_TESTING)
     target_compile_options(BaseGradeCoreTest PRIVATE -O2)
   endif()
   add_test(NAME BaseGradeCoreTest COMMAND BaseGradeCoreTest)
+
+  add_executable(BaseGradeWhiteBalanceTest tests/test_white_balance.cpp)
+  target_include_directories(BaseGradeWhiteBalanceTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  if(NOT MSVC)
+    target_compile_options(BaseGradeWhiteBalanceTest PRIVATE -O2)
+  endif()
+  add_test(NAME BaseGradeWhiteBalanceTest COMMAND BaseGradeWhiteBalanceTest)
 endif()
 
 install(DIRECTORY "${BUNDLE}" DESTINATION "${OFX_INSTALL}")
