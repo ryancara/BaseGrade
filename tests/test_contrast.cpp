@@ -70,19 +70,45 @@ int main()
               "Curve Softness should keep the pivot fixed");
     }
 
-    // Toe controls should affect deep shadows without changing tones above the
-    // selected toe region.
+    // Bipolar Toe Amount should soften/lift in the positive direction and
+    // deepen/harden in the negative direction, while leaving tones above the
+    // selected toe region unchanged.
     {
         bg::ContrastParams plain;
-        bg::ContrastParams toe;
-        toe.toeStrength = 80.0;
-        toe.toeRangeEV = 4.0;
+        bg::ContrastParams softToe;
+        softToe.toeStrength = 80.0;
+        softToe.toeRangeEV = 4.0;
+        bg::ContrastParams hardToe = softToe;
+        hardToe.toeStrength = -80.0;
+
         const float deep = 0.002f;
         const float mid = 0.18f;
-        check(bg::applyContrastScalar(deep, toe) > bg::applyContrastScalar(deep, plain),
-              "Toe Strength should soften/compress deep shadows upward");
-        check(std::fabs(bg::applyContrastScalar(mid, toe) - mid) < 2e-6f,
-              "Toe should leave middle grey unchanged");
+        const float plainDeep = bg::applyContrastScalar(deep, plain);
+        const float softDeep = bg::applyContrastScalar(deep, softToe);
+        const float hardDeep = bg::applyContrastScalar(deep, hardToe);
+
+        check(softDeep > plainDeep,
+              "positive Toe Amount should soften/lift deep shadows");
+        check(hardDeep < plainDeep,
+              "negative Toe Amount should deepen/harden deep shadows");
+        check(std::fabs(bg::applyContrastScalar(mid, softToe) - mid) < 2e-6f &&
+              std::fabs(bg::applyContrastScalar(mid, hardToe) - mid) < 2e-6f,
+              "Toe Amount should leave middle grey unchanged");
+    }
+
+    // Both toe directions should join continuously at the selected threshold.
+    {
+        const double thresholdCode = bg::toeThresholdCode(4.0);
+        const float thresholdLinear = bg::decodeTransfer(float(thresholdCode),
+                                                         bg::kTransferDaVinciIntermediate);
+        for (double amount : {-100.0, 100.0}) {
+            bg::ContrastParams p;
+            p.toeStrength = amount;
+            p.toeRangeEV = 4.0;
+            const float at = bg::applyContrastScalar(thresholdLinear, p);
+            check(std::fabs(at - thresholdLinear) < 2e-6f,
+                  "toe should be continuous at its threshold");
+        }
     }
 
     // Colour Preserve blends between per-channel curves and a luminance-ratio
