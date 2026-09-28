@@ -13,6 +13,7 @@
 #include "color_management.h"
 #include "exposure.h"
 #include "white_balance.h"
+#include "contrast.h"
 #include "regularization.h"
 
 #include <algorithm>
@@ -24,12 +25,12 @@
 #define kPluginGrouping "Color"
 #define kPluginDescription                                                     \
     "Photo-oriented primary grading controls for OpenFX. The current build "   \
-    "contains scene-linear Exposure, selectable Temp/Tint white balance, and " \
-    "an ART-derived spatial Tone Equalizer with explicit input gamut and "      \
-    "transfer handling."
+    "contains scene-linear Exposure, selectable Temp/Tint white balance, an "  \
+    "ART-derived spatial Tone Equalizer, and global contrast shaping with "     \
+    "explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 5
+#define kPluginVersionMinor 6
 
 namespace {
 
@@ -50,11 +51,15 @@ public:
         tint_ = fetchDoubleParam("tint");
         for (int i = 0; i < 5; ++i) bands_[i] = fetchIntParam(kBandNames[i]);
         pivot_ = fetchDoubleParam("pivot");
-        // Keep the internal parameter ID stable for BaseGrade project/preset
-        // compatibility going forward, while exposing ART's UI name.
         regularization_ = fetchIntParam("detail");
         regularizationScale_ = fetchDoubleParam("regularizationScale");
         showMap_ = fetchBooleanParam("showMap");
+        contrast_ = fetchDoubleParam("contrast");
+        contrastPivot_ = fetchDoubleParam("contrastPivot");
+        curveSoftness_ = fetchDoubleParam("curveSoftness");
+        toeStrength_ = fetchDoubleParam("toeStrength");
+        toeRange_ = fetchDoubleParam("toeRange");
+        colourPreserve_ = fetchDoubleParam("colourPreserve");
     }
 
     void render(const OFX::RenderArguments &args) override
@@ -94,6 +99,14 @@ public:
         const double regularizationScale = regularizationScale_->getValueAtTime(args.time);
         const bool showMap = showMap_->getValueAtTime(args.time);
 
+        bg::ContrastParams cp;
+        cp.contrast = contrast_->getValueAtTime(args.time);
+        cp.pivotEV = contrastPivot_->getValueAtTime(args.time);
+        cp.softness = curveSoftness_->getValueAtTime(args.time);
+        cp.toeStrength = toeStrength_->getValueAtTime(args.time);
+        cp.toeRangeEV = toeRange_->getValueAtTime(args.time);
+        cp.colourPreserve = colourPreserve_->getValueAtTime(args.time);
+
         teq::ToneEqualizer eq(pp);
         const float pivotGain = teq::ToneEqualizer::pivotGain(pp.pivot);
 
@@ -104,8 +117,8 @@ public:
             srcRows[y] = static_cast<const float *>(src->getPixelAddress(sb.x1, sb.y1 + y));
 
         // Build the spatial mask from scene-linear RGB in the selected gamut.
-        // Exposure and white balance are upstream of Tone EQ, so changing them
-        // naturally moves image content through the equalizer's tonal bands.
+        // Exposure and white balance are upstream of Tone EQ. Global contrast
+        // is intentionally downstream and therefore does not move the mask.
         teq::Plane Y(sw, sh);
         teq::parallelRange(sh, [&](int y0, int y1) {
             for (int y = y0; y < y1; ++y) {
@@ -121,15 +134,12 @@ public:
                     float r, g, b;
                     bg::applyWhiteBalance(wb, er, eg, eb, r, g, b);
                     float l = (lw[0] * r + lw[1] * g + lw[2] * b) * pivotGain;
-                    if (!(l > 1e-5f)) l = 1e-5f; // also catches NaN/negative mask luma
+                    if (!(l > 1e-5f)) l = 1e-5f;
                     yr[x] = l > 32.f ? 32.f : l;
                 }
             }
         });
 
-        // 1.0x takes ART's exact original path. Other values change only the
-        // large 350 px regularization stage; the small ~5 px conditioning pass
-        // remains ART-compatible.
         bg::filterMaskScaled(eq, pp, Y, args.renderScale.x, regularizationScale);
 
         const OfxRectI rw = args.renderWindow;
@@ -168,9 +178,15 @@ public:
                             bg::decodeTransfer(s[2], transferIndex), exposureGain);
                         float r, g, b;
                         bg::applyWhiteBalance(wb, er, eg, eb, r, g, b);
-                        d[0] = bg::encodeTransfer(r * c, transferIndex);
-                        d[1] = bg::encodeTransfer(g * c, transferIndex);
-                        d[2] = bg::encodeTransfer(b * c, transferIndex);
+                        r *= c;
+                        g *= c;
+                        b *= c;
+
+                        float cr, cg, cb;
+                        bg::applyContrastRGB(cp, lw, r, g, b, cr, cg, cb);
+                        d[0] = bg::encodeTransfer(cr, transferIndex);
+                        d[1] = bg::encodeTransfer(cg, transferIndex);
+                        d[2] = bg::encodeTransfer(cb, transferIndex);
                     }
                     d[3] = s[3];
                 }
@@ -191,6 +207,12 @@ private:
     OFX::IntParam *regularization_ = nullptr;
     OFX::DoubleParam *regularizationScale_ = nullptr;
     OFX::BooleanParam *showMap_ = nullptr;
+    OFX::DoubleParam *contrast_ = nullptr;
+    OFX::DoubleParam *contrastPivot_ = nullptr;
+    OFX::DoubleParam *curveSoftness_ = nullptr;
+    OFX::DoubleParam *toeStrength_ = nullptr;
+    OFX::DoubleParam *toeRange_ = nullptr;
+    OFX::DoubleParam *colourPreserve_ = nullptr;
 };
 
 mDeclarePluginFactory(BaseGradeFactory, {}, {});
@@ -206,7 +228,7 @@ void BaseGradeFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setSingleInstance(false);
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
-    desc.setSupportsTiles(false); // regularisation needs the whole frame
+    desc.setSupportsTiles(false);
     desc.setTemporalClipAccess(false);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
@@ -287,8 +309,6 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
         p->setRange(-115.0, 450.0);
-        // Keep the normal grading range/feel unchanged. Resolve can still accept
-        // typed values outside this display range up to the hard parameter range.
         p->setDisplayRange(-100.0, 100.0);
         p->setHint("Relative reciprocal-colour-temperature shift around the "
                    "selected gamut's reference white. Positive warms, negative "
@@ -303,7 +323,6 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
         p->setRange(-200.0, 200.0);
-        // Preserve the original slider sensitivity for normal adjustments.
         p->setDisplayRange(-100.0, 100.0);
         p->setHint("Colourimetric green/magenta shift perpendicular to the "
                    "Planckian locus in CIE 1960 u,v. Positive is magenta; "
@@ -325,7 +344,7 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     }
     {
         OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("pivot");
-        p->setLabels("Pivot (EV)", "Pivot (EV)", "Pivot (EV)");
+        p->setLabels("Tone EQ Pivot (EV)", "Tone EQ Pivot (EV)", "Tone EQ Pivot (EV)");
         p->setDoubleType(OFX::eDoubleTypePlain);
         p->setDefault(0.0);
         p->setRange(-12.0, 12.0);
@@ -334,8 +353,6 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         page->addChild(*p);
     }
     {
-        // Retain the original internal ID "detail" for BaseGrade project and
-        // preset compatibility going forward, while exposing ART's UI name.
         OFX::IntParamDescriptor *p = desc.defineIntParam("detail");
         p->setLabels("Regularization", "Regularization", "Regularization");
         p->setDefault(4);
@@ -364,6 +381,78 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(false);
         p->setHint("Diagnostic tonal map: purple=blacks, blue=shadows, "
                    "grey=midtones, yellow=highlights, red=whites.");
+        page->addChild(*p);
+    }
+
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("contrast");
+        p->setLabels("Contrast", "Contrast", "Contrast");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(-200.0, 200.0);
+        p->setDisplayRange(-100.0, 100.0);
+        p->setHint("Global pivoted contrast. +100 doubles the local tone-curve "
+                   "slope; -100 halves it. Applied after the Tone Equalizer.");
+        p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("contrastPivot");
+        p->setLabels("Contrast Pivot (EV)", "Contrast Pivot (EV)", "Contrast Pivot (EV)");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(-6.0, 6.0);
+        p->setDisplayRange(-3.0, 3.0);
+        p->setHint("Fixed point of the global contrast curve, measured in stops "
+                   "relative to 18% scene-linear grey. Independent of Tone EQ Pivot.");
+        p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("curveSoftness");
+        p->setLabels("Curve Softness", "Curve Softness", "Curve Softness");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(0.0, 100.0);
+        p->setDisplayRange(0.0, 100.0);
+        p->setHint("Rounds the global contrast line into a progressively softer "
+                   "S-curve while keeping the contrast pivot fixed.");
+        p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("toeStrength");
+        p->setLabels("Toe Strength", "Toe Strength", "Toe Strength");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(0.0, 100.0);
+        p->setDisplayRange(0.0, 100.0);
+        p->setHint("Adds smooth low-end compression below the Toe Range threshold.");
+        p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("toeRange");
+        p->setLabels("Toe Range (EV)", "Toe Range (EV)", "Toe Range (EV)");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(4.0);
+        p->setRange(1.0, 8.0);
+        p->setDisplayRange(1.0, 8.0);
+        p->setHint("Sets how far below 18% grey the toe begins. Larger values "
+                   "restrict the toe to deeper shadows.");
+        p->setAnimates(true);
+        page->addChild(*p);
+    }
+    {
+        OFX::DoubleParamDescriptor *p = desc.defineDoubleParam("colourPreserve");
+        p->setLabels("Colour Preserve", "Colour Preserve", "Colour Preserve");
+        p->setDoubleType(OFX::eDoubleTypePlain);
+        p->setDefault(0.0);
+        p->setRange(0.0, 100.0);
+        p->setDisplayRange(0.0, 100.0);
+        p->setHint("Blends contrast processing from regular per-channel RGB "
+                   "curves at 0% to luminance-only contrast at 100%.");
+        p->setAnimates(true);
         page->addChild(*p);
     }
 }
