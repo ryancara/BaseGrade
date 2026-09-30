@@ -31,7 +31,7 @@
     "explicit input gamut and transfer handling."
 #define kPluginIdentifier "io.github.ryancara.BaseGrade"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 9
+#define kPluginVersionMinor 10
 
 namespace {
 
@@ -459,10 +459,10 @@ void BaseGradeFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         p->setDefault(4.0);
         p->setRange(1.0, 8.0);
         p->setDisplayRange(1.0, 8.0);
-        p->setHint("Places the toe threshold this many stops below Contrast "
-                   "Pivot on the contrast/softness curve output. Larger values "
-                   "restrict it to deeper output tones; negative Contrast can "
-                   "lift dark inputs above the threshold and reduce the effect.");
+        p->setHint("Selects an input exposure boundary this many stops below "
+                   "Contrast Pivot. The boundary moves with the pivot and is "
+                   "mapped through Contrast/Softness before the Toe joins onto "
+                   "the curve, so the selected Toe region remains consistent.");
         p->setAnimates(true);
         page->addChild(*p);
     }
