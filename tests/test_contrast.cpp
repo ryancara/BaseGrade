@@ -80,8 +80,8 @@ int main()
         check(bOut > bright, "positive contrast should brighten above the pivot");
     }
 
-    // Toe Range is measured below Contrast Pivot, so an active toe can never
-    // reach or move the pivot itself.
+    // Toe Range is measured below Contrast Pivot in the input domain, so an
+    // active toe can never reach or move the pivot itself.
     {
         bool fixed = true;
         for (double pivotEV : {-6.0, -3.0, 0.0, 3.0, 6.0})
@@ -170,19 +170,54 @@ int main()
               "Toe Amount should leave middle grey unchanged");
     }
 
-    // Both toe directions should join continuously at the selected threshold.
+    // Toe Range selects an INPUT-domain boundary, but the toe joins at that
+    // boundary after it has been mapped through Contrast/Softness. The join
+    // must remain continuous for either contrast direction and either toe sign.
     {
-        const double thresholdCode = bg::toeThresholdCode(4.0);
-        const float thresholdLinear = bg::decodeTransfer(float(thresholdCode),
-                                                         bg::kTransferDaVinciIntermediate);
-        for (double amount : {-100.0, 100.0}) {
-            bg::ContrastParams p;
-            p.toeStrength = amount;
-            p.toeRangeEV = 4.0;
-            const float at = bg::applyContrastScalar(thresholdLinear, p);
-            check(std::fabs(at - thresholdLinear) < 2e-6f,
-                  "toe should be continuous at its threshold");
-        }
+        bool continuous = true;
+        for (double contrast : {-100.0, 100.0})
+            for (double softness : {0.0, 60.0})
+                for (double amount : {-100.0, 100.0}) {
+                    bg::ContrastParams p;
+                    p.contrast = contrast;
+                    p.softness = softness;
+                    p.toeStrength = amount;
+                    p.toeRangeEV = 4.0;
+                    const bg::PreparedContrast q = bg::prepareContrast(p);
+                    const float thresholdLinear = bg::decodeTransfer(
+                        float(q.toeInputThreshold), bg::kTransferDaVinciIntermediate);
+                    const float at = bg::applyContrastScalar(thresholdLinear, q);
+                    const float expected = bg::decodeTransfer(
+                        float(q.toeOutputThreshold), bg::kTransferDaVinciIntermediate);
+                    if (std::fabs(at - expected) > 2e-6f)
+                        continuous = false;
+                }
+        check(continuous, "toe should join continuously at its input-domain threshold");
+    }
+
+    // Input-relative Toe Range must keep working under negative Contrast.
+    // Negative contrast may lift the mapped output boundary, but it must not
+    // remove the selected input region from Toe processing.
+    {
+        bg::ContrastParams base;
+        base.contrast = -100.0;
+        base.softness = 30.0;
+        base.toeRangeEV = 4.0;
+
+        bg::ContrastParams softToe = base;
+        softToe.toeStrength = 80.0;
+        bg::ContrastParams hardToe = base;
+        hardToe.toeStrength = -80.0;
+
+        const float deep = float(bg::contrastPivotLinear(0.0) * std::pow(2.0, -6.0));
+        const float neutral = bg::applyContrastScalar(deep, base);
+        const float softened = bg::applyContrastScalar(deep, softToe);
+        const float hardened = bg::applyContrastScalar(deep, hardToe);
+
+        check(softened > neutral,
+              "positive Toe Amount should remain active under negative Contrast");
+        check(hardened < neutral,
+              "negative Toe Amount should remain active under negative Contrast");
     }
 
     // Deterministic sweep across the full control ranges. The scalar curve must
