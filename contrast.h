@@ -12,7 +12,7 @@ struct ContrastParams {
     double pivotEV = 0.0;         // stops relative to 18% grey
     double softness = 0.0;        // 0..100
     double toeStrength = 0.0;     // -100..100: harden -> soften
-    double toeRangeEV = 4.0;      // 1..8 stops below Contrast Pivot
+    double toeRangeEV = 4.0;      // 1..8 input stops below Contrast Pivot
     double colourPreserve = 0.0;  // 0..100: RGB curve -> luminance-only
 };
 
@@ -40,6 +40,8 @@ inline double contrastPivotCode(double pivotEV)
                           kTransferDaVinciIntermediate);
 }
 
+// Input-domain toe boundary. Toe Range is measured in scene-referred stops
+// below Contrast Pivot before Contrast/Softness reshapes the signal.
 inline double toeThresholdCode(double pivotEV, double toeRangeEV)
 {
     const double range = std::max(1.0, std::min(toeRangeEV, 8.0));
@@ -62,10 +64,25 @@ struct PreparedContrast {
     double slope = 1.0;
     double softnessK = 0.0;
     double toe = 0.0;
-    double toeThreshold = 0.0;
+    double toeInputThreshold = 0.0;
+    double toeOutputThreshold = 0.0;
     double toeK = 0.0;
     double preserve = 0.0;
 };
+
+inline double applyContrastBaseCode(double code, const PreparedContrast &p)
+{
+    const double fromPivot = code - p.pivotCode;
+    double delta = (p.slope - 1.0) * fromPivot;
+
+    // Softness rolls off only the extra contrast displacement. This means it
+    // cannot create a tone curve by itself when Contrast is zero, while the
+    // derivative at the pivot still equals the requested contrast slope.
+    if (p.softnessK > 0.0 && delta != 0.0)
+        delta /= 1.0 + p.softnessK * std::fabs(fromPivot);
+
+    return code + delta;
+}
 
 inline PreparedContrast prepareContrast(const ContrastParams &p)
 {
@@ -76,7 +93,8 @@ inline PreparedContrast prepareContrast(const ContrastParams &p)
     q.softnessK = 4.0 *
         (std::max(0.0, std::min(p.softness, 100.0)) / 100.0);
     q.toe = std::max(-100.0, std::min(p.toeStrength, 100.0)) / 100.0;
-    q.toeThreshold = toeThresholdCode(p.pivotEV, p.toeRangeEV);
+    q.toeInputThreshold = toeThresholdCode(p.pivotEV, p.toeRangeEV);
+    q.toeOutputThreshold = applyContrastBaseCode(q.toeInputThreshold, q);
     q.toeK = 10.0 * std::fabs(q.toe);
     q.preserve = std::max(0.0, std::min(p.colourPreserve, 100.0)) / 100.0;
     return q;
@@ -86,28 +104,19 @@ inline double applyContrastCode(double code, const PreparedContrast &p)
 {
     if (p.identity) return code;
 
-    const double fromPivot = code - p.pivotCode;
-    double delta = (p.slope - 1.0) * fromPivot;
+    double y = applyContrastBaseCode(code, p);
 
-    // Softness rolls off only the extra contrast displacement. This means it
-    // cannot create a tone curve by itself when Contrast is zero, while the
-    // derivative at the pivot still equals the requested contrast slope.
-    if (p.softnessK > 0.0 && delta != 0.0)
-        delta /= 1.0 + p.softnessK * std::fabs(fromPivot);
-
-    double y = code + delta;
-
-    // Independent bipolar low-end toe. Positive values compress the distance
-    // below the threshold, lifting/softening the deepest shadows. Negative
-    // values expand that distance, deepening/hardening the toe. Toe Range is
-    // measured below Contrast Pivot, so moving Pivot moves the toe with it and
-    // the toe threshold always remains below the pivot itself.
-    if (p.toe != 0.0 && y < p.toeThreshold) {
-        const double dist = p.toeThreshold - y;
+    // Independent bipolar low-end toe. The affected region is selected in the
+    // INPUT domain, so Toe Range remains a predictable EV distance below
+    // Contrast Pivot regardless of Contrast amount. The join point is mapped
+    // through Contrast/Softness first, then the toe shapes output distance from
+    // that mapped point. This keeps the join smooth while preserving the pivot.
+    if (p.toe != 0.0 && code < p.toeInputThreshold) {
+        const double dist = p.toeOutputThreshold - y;
         const double shapedDist = p.toe > 0.0
             ? dist / (1.0 + p.toeK * dist)
             : dist * (1.0 + p.toeK * dist);
-        y = p.toeThreshold - shapedDist;
+        y = p.toeOutputThreshold - shapedDist;
     }
 
     return y;
